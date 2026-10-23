@@ -6,6 +6,7 @@ use crate::{
     expression::{Expression, Predicate},
 };
 
+#[derive(Debug, PartialEq, Clone)]
 pub enum SqlAction {
     CreateTable {
         name: String,

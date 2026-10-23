@@ -1,5 +1,6 @@
 use crate::dml::select::{SubQuery};
 
+#[derive(Debug, PartialEq, Clone)]
 pub enum Literal {
     Integer(i64),
     Float(f64),
@@ -8,6 +9,7 @@ pub enum Literal {
     Null,
 }
 
+#[derive(Debug, PartialEq, Clone)]
 pub enum AggregateValues {
     Count {
         expression: Box<Expression>,
@@ -26,6 +28,7 @@ pub enum AggregateValues {
     Max(Box<Expression>),
 }
 
+#[derive(Debug, PartialEq, Clone)]
 pub enum Expression {
     Constant(Literal),
     Add(Box<Expression>, Box<Expression>),
@@ -45,11 +48,13 @@ pub enum Expression {
     Aggregate(AggregateValues),
 }
 
+#[derive(Debug, PartialEq, Clone)]
 pub enum InValue {
     List(Vec<Literal>),
     Query(SubQuery),
 }
 
+#[derive(Debug, PartialEq, Clone, Copy, Eq)]
 pub enum Comparison {
     Equals,
     NotEquals,
@@ -59,6 +64,7 @@ pub enum Comparison {
     LessThanEquals,
 }
 
+#[derive(Debug, PartialEq, Clone)]
 pub enum Predicate {
     Compare(Comparison, Expression, Expression),
 

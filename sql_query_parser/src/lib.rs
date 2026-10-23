@@ -1,19 +1,10 @@
-pub mod expression;
 pub mod action;
 pub mod ddl;
 pub mod dml;
+pub mod error;
+pub mod expression;
+pub mod parser;
 
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-}
+pub use error::ParseError;
+pub use parser::parse;
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
-}

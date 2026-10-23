@@ -2,30 +2,36 @@ pub mod select {
 
     use crate::expression::{Expression, Predicate};
 
+    #[derive(Debug, PartialEq, Clone)]
     pub struct GroupBy {
         pub group_values: Vec<String>,
         pub having_clause: Option<Predicate>,
     }
 
+    #[derive(Debug, PartialEq, Clone, Copy, Eq)]
     pub enum Order {
         Asc,
         Desc,
     }
 
+    #[derive(Debug, PartialEq, Clone)]
     pub struct OrderClause {
         pub alias: String,
         pub order: Order,
     }
 
+    #[derive(Debug, PartialEq, Clone)]
     pub struct OrderBy {
         pub values: Vec<OrderClause>,
     }
 
+    #[derive(Debug, PartialEq, Clone)]
     pub struct SelectItem {
         pub expr: Expression,
         pub alias: Option<String>
     }
 
+    #[derive(Debug, PartialEq, Clone)]
     pub enum SqlQuery {
         Basic {
             select: Vec<SelectItem>,
@@ -43,11 +49,13 @@ pub mod select {
         ExceptAll(Box<SqlQuery>, Box<SqlQuery>),
     }
 
+    #[derive(Debug, PartialEq, Clone)]
     pub struct SubQuery {
         pub sub_query: Box<SqlQuery>,
         pub imported_variables: Vec<String>,
     }
 
+    #[derive(Debug, PartialEq, Clone)]
     pub enum TableRef {
         Table {
             name: String,
@@ -63,6 +71,7 @@ pub mod select {
         },
     }
 
+    #[derive(Debug, PartialEq, Clone)]
     pub enum JoinType {
         CrossJoin(Box<TableRef>),
         LeftJoin {

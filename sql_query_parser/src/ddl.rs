@@ -1,5 +1,6 @@
 use crate::expression::Literal;
 
+#[derive(Debug, PartialEq, Clone)]
 pub enum TupleEntryDataType {
     Char(u64),
     VarChar(u64),
@@ -9,6 +10,7 @@ pub enum TupleEntryDataType {
     Time,
 }
 
+#[derive(Debug, PartialEq, Clone)]
 pub enum KeyConstraint {
     Unique(Vec<String>),
     PrimaryKey(Vec<String>),
@@ -19,6 +21,7 @@ pub enum KeyConstraint {
     },
 }
 
+#[derive(Debug, PartialEq, Clone)]
 pub struct TupleSchemaEntry {
     pub entry: String,
     pub data_type: TupleEntryDataType,

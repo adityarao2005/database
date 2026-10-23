@@ -19,7 +19,7 @@ pub enum SqlAction {
         name: String,
         if_exists: bool,
     },
-    Select(SqlQuery),
+    Select(Box<SqlQuery>),
     Insert {
         table: String,
         columns: Vec<String>,
@@ -28,15 +28,15 @@ pub enum SqlAction {
     InsertInto {
         table: String,
         columns: Vec<String>,
-        sql_query: SqlQuery,
+        sql_query: Box<SqlQuery>,
     },
     Update {
         table: String,
-        value_map: HashMap<String, Expression>,
-        where_clause: Option<Predicate>,
+        value_map: HashMap<String, Box<Expression>>,
+        where_clause: Option<Box<Predicate>>,
     },
     Delete {
         table: String,
-        where_clause: Option<Predicate>,
+        where_clause: Option<Box<Predicate>>,
     },
 }

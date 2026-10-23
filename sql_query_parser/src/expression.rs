@@ -66,24 +66,24 @@ pub enum Comparison {
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum Predicate {
-    Compare(Comparison, Expression, Expression),
+    Compare(Comparison, Box<Expression>, Box<Expression>),
 
-    Between(Expression, Expression, Expression),
+    Between(Box<Expression>, Box<Expression>, Box<Expression>),
 
-    IsNull(Expression),
-    IsNotNull(Expression),
+    IsNull(Box<Expression>),
+    IsNotNull(Box<Expression>),
 
-    Like(Expression, String),
+    Like(Box<Expression>, String),
 
     And(Box<Predicate>, Box<Predicate>),
     Or(Box<Predicate>, Box<Predicate>),
     Not(Box<Predicate>),
 
-    Exists(SubQuery),
-    In(Expression, InValue),
+    Exists(Box<SubQuery>),
+    In(Box<Expression>, InValue),
 
-    All(Comparison, Expression, SubQuery),
-    Any(Comparison, Expression, SubQuery),
+    All(Comparison, Box<Expression>, Box<SubQuery>),
+    Any(Comparison, Box<Expression>, Box<SubQuery>),
 
     True,
     False,

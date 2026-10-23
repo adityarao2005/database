@@ -21,6 +21,10 @@ pub enum SqlAction {
         table: String,
         value_map: HashMap<String, String>,
     },
+    InsertInto {
+        table: String,
+        sql_query: SqlQuery,
+    },
     Update {
         table: String,
         value_map: HashMap<String, String>,

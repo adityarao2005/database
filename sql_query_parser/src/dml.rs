@@ -1,5 +1,3 @@
-
-
 pub mod select {
     use std::collections::HashMap;
 
@@ -24,12 +22,20 @@ pub mod select {
         pub values: Vec<OrderClause>,
     }
 
-    pub struct SqlQuery {
-        pub select: HashMap<String, Expression>,
-        pub from: HashMap<String, TableLike>,
-        pub where_clause: Predicate,
-        pub group_by: GroupBy,
-        pub order: OrderBy,
+    pub enum SqlQuery {
+        Basic {
+            select: HashMap<String, Expression>,
+            from: HashMap<String, TableLike>,
+            where_clause: Predicate,
+            group_by: GroupBy,
+            order: OrderBy,
+        },
+        Union(Box<SqlQuery>, Box<SqlQuery>),
+        UnionAll(Box<SqlQuery>, Box<SqlQuery>),
+        Intersect(Box<SqlQuery>, Box<SqlQuery>),
+        IntersectAll(Box<SqlQuery>, Box<SqlQuery>),
+        Except(Box<SqlQuery>, Box<SqlQuery>),
+        ExceptAll(Box<SqlQuery>, Box<SqlQuery>),
     }
 
     pub enum TableLike {

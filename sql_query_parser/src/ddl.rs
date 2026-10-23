@@ -1,3 +1,4 @@
+use crate::expression::Literal;
 
 pub enum TupleEntryDataType {
     Char(u64),
@@ -22,4 +23,5 @@ pub struct TupleSchemaEntry {
     pub entry: String,
     pub data_type: TupleEntryDataType,
     pub not_null: bool,
+    pub default: Literal,
 }

@@ -15,6 +15,15 @@ pub enum SqlAction {
         if_exists: bool,
         check: Vec<Predicate>,
     },
+    CreateView {
+        name: String,
+        material: bool,
+        as_query: Box<SqlQuery>
+    },
+    DropView {
+        name: String,
+        if_exists: bool,
+    },
     DropTable {
         name: String,
         if_exists: bool,

@@ -26,6 +26,7 @@ pub enum SqlAction {
     },
     InsertInto {
         table: String,
+        columns: Vec<String>,
         sql_query: SqlQuery,
     },
     Update {

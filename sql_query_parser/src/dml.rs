@@ -1,5 +1,4 @@
 pub mod select {
-    use std::collections::HashMap;
 
     use crate::expression::{Expression, Predicate};
 
@@ -31,7 +30,7 @@ pub mod select {
         Basic {
             select: Vec<SelectItem>,
             distinct: bool,
-            from: HashMap<String, TableRef>,
+            from: TableRef,
             where_clause: Option<Predicate>,
             group_by: Option<GroupBy>,
             order: Option<OrderBy>,

@@ -22,13 +22,19 @@ pub mod select {
         pub values: Vec<OrderClause>,
     }
 
+    pub struct SelectItem {
+        pub expr: Expression,
+        pub alias: Option<String>
+    }
+
     pub enum SqlQuery {
         Basic {
-            select: HashMap<String, Expression>,
-            from: HashMap<String, TableLike>,
-            where_clause: Predicate,
-            group_by: GroupBy,
-            order: OrderBy,
+            select: Vec<SelectItem>,
+            distinct: bool,
+            from: HashMap<String, TableRef>,
+            where_clause: Option<Predicate>,
+            group_by: Option<GroupBy>,
+            order: Option<OrderBy>,
         },
         Union(Box<SqlQuery>, Box<SqlQuery>),
         UnionAll(Box<SqlQuery>, Box<SqlQuery>),
@@ -38,8 +44,43 @@ pub mod select {
         ExceptAll(Box<SqlQuery>, Box<SqlQuery>),
     }
 
-    pub enum TableLike {
-        Table(String),
-        SubQuery(Box<SqlQuery>),
+    pub struct SubQuery {
+        pub sub_query: Box<SqlQuery>,
+        pub imported_variables: Vec<String>,
+    }
+
+    pub enum TableRef {
+        Table {
+            name: String,
+            alias: Option<String>
+        },
+        SubQuery {
+            query: Box<SqlQuery>,
+            alias: String
+        },
+        Join {
+            relation: Box<TableRef>,
+            join_type: JoinType,
+        },
+    }
+
+    pub enum JoinType {
+        CrossJoin(Box<TableRef>),
+        LeftJoin {
+            other: Box<TableRef>,
+            condition: Predicate,
+        },
+        RightJoin {
+            other: Box<TableRef>,
+            condition: Predicate,
+        },
+        InnerJoin {
+            other: Box<TableRef>,
+            condition: Predicate,
+        },
+        FullJoin {
+            other: Box<TableRef>,
+            condition: Predicate,
+        },
     }
 }

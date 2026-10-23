@@ -1,7 +1,9 @@
 use std::collections::HashMap;
 
 use crate::{
-    dml::select::SqlQuery, ddl::{KeyConstraint, TupleSchemaEntry}, expression::Predicate,
+    ddl::{KeyConstraint, TupleSchemaEntry},
+    dml::select::SqlQuery,
+    expression::{Expression, Predicate},
 };
 
 pub enum SqlAction {
@@ -10,7 +12,7 @@ pub enum SqlAction {
         entries: Vec<TupleSchemaEntry>,
         key_constraints: Vec<KeyConstraint>,
         if_exists: bool,
-        check: Vec<Predicate>
+        check: Vec<Predicate>,
     },
     DropTable {
         name: String,
@@ -19,7 +21,8 @@ pub enum SqlAction {
     Select(SqlQuery),
     Insert {
         table: String,
-        value_map: HashMap<String, String>,
+        columns: Vec<String>,
+        value: Vec<Vec<Expression>>,
     },
     InsertInto {
         table: String,
@@ -27,12 +30,11 @@ pub enum SqlAction {
     },
     Update {
         table: String,
-        value_map: HashMap<String, String>,
-        where_clause: Predicate,
+        value_map: HashMap<String, Expression>,
+        where_clause: Option<Predicate>,
     },
     Delete {
         table: String,
-        where_clause: Predicate,
+        where_clause: Option<Predicate>,
     },
 }
-

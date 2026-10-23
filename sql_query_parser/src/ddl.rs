@@ -23,5 +23,5 @@ pub struct TupleSchemaEntry {
     pub entry: String,
     pub data_type: TupleEntryDataType,
     pub not_null: bool,
-    pub default: Literal,
+    pub default: Option<Literal>,
 }

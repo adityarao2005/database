@@ -1,4 +1,4 @@
-use crate::dml::select::SqlQuery;
+use crate::dml::select::{SubQuery};
 
 pub enum Literal {
     Integer(i64),
@@ -6,23 +6,24 @@ pub enum Literal {
     String(String),
     Boolean(bool),
     Null,
-
 }
 
 pub enum AggregateValues {
-    Distinct(String),
     Count {
-        var: String,
-        distinct: bool
+        expression: Box<Expression>,
+        distinct: bool,
     },
+    CountStar,
     Sum {
-        var: String,
-        distinct: bool
+        expression: Box<Expression>,
+        distinct: bool,
     },
     Avg {
-        var: String,
-        distinct: bool
-    }
+        expression: Box<Expression>,
+        distinct: bool,
+    },
+    Min(Box<Expression>),
+    Max(Box<Expression>),
 }
 
 pub enum Expression {
@@ -34,22 +35,19 @@ pub enum Expression {
     Negate(Box<Expression>),
     Function {
         name: String,
-        args: Vec<Box<Expression>>
+        args: Vec<Box<Expression>>,
     },
     Variable {
         name: String,
-        table: Option<String>
+        table: Option<String>,
     },
-    SubQuery {
-        sub_query: Box<SqlQuery>,
-        imported_variables: Vec<String>
-    },
-    Aggregate(AggregateValues)
+    SubQuery(SubQuery),
+    Aggregate(AggregateValues),
 }
 
 pub enum InValue {
     List(Vec<Literal>),
-    Query(Box<SqlQuery>)
+    Query(SubQuery),
 }
 
 pub enum Comparison {
@@ -63,25 +61,24 @@ pub enum Comparison {
 
 pub enum Predicate {
     Compare(Comparison, Expression, Expression),
-    
+
     Between(Expression, Expression, Expression),
-    
+
     IsNull(Expression),
     IsNotNull(Expression),
-    
+
     Like(Expression, String),
 
     And(Box<Predicate>, Box<Predicate>),
     Or(Box<Predicate>, Box<Predicate>),
     Not(Box<Predicate>),
 
-    Exists(Expression, Box<SqlQuery>),
+    Exists(SubQuery),
     In(Expression, InValue),
-    NotIn(Expression, Box<SqlQuery>),
 
-    All(Comparison, Expression, Expression),
-    Any(Comparison, Expression, Expression),
+    All(Comparison, Expression, SubQuery),
+    Any(Comparison, Expression, SubQuery),
 
     True,
-    False
+    False,
 }

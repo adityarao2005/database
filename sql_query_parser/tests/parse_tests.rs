@@ -87,7 +87,6 @@ fn simple_select(select: Vec<SelectItem>, from: TableRef) -> SqlQuery {
 // =========================================================================
 
 #[test]
-#[ignore = "parser implementation in progress"]
 fn test_create_table_basic() {
     let sql = "CREATE TABLE users (id INT, name VARCHAR(255));";
     let expected = SqlAction::CreateTable {
@@ -115,7 +114,6 @@ fn test_create_table_basic() {
 }
 
 #[test]
-#[ignore = "parser implementation in progress"]
 fn test_create_table_if_not_exists() {
     let sql = "CREATE TABLE IF NOT EXISTS items (id INT);";
     let expected = SqlAction::CreateTable {
@@ -135,7 +133,6 @@ fn test_create_table_if_not_exists() {
 }
 
 #[test]
-#[ignore = "parser implementation in progress"]
 fn test_drop_table_basic() {
     let sql = "DROP TABLE users;";
     let expected = SqlAction::DropTable {
@@ -147,7 +144,6 @@ fn test_drop_table_basic() {
 }
 
 #[test]
-#[ignore = "parser implementation in progress"]
 fn test_drop_table_if_exists() {
     let sql = "DROP TABLE IF EXISTS users;";
     let expected = SqlAction::DropTable {
@@ -163,7 +159,6 @@ fn test_drop_table_if_exists() {
 // =========================================================================
 
 #[test]
-#[ignore = "parser implementation in progress"]
 fn test_create_table_all_data_types_and_defaults() {
     let sql = "CREATE TABLE records (
         code CHAR(8) NOT NULL,
@@ -230,7 +225,6 @@ fn test_create_table_all_data_types_and_defaults() {
 }
 
 #[test]
-#[ignore = "parser implementation in progress"]
 fn test_create_table_with_constraints_and_check() {
     let sql = "CREATE TABLE orders (
         order_id INT NOT NULL,
@@ -296,7 +290,6 @@ fn test_create_table_with_constraints_and_check() {
 // =========================================================================
 
 #[test]
-#[ignore = "parser implementation in progress"]
 fn test_select_simple_columns() {
     let sql = "SELECT id, name FROM users;";
     let expected = SqlAction::Select(Box::new(simple_select(
@@ -308,7 +301,6 @@ fn test_select_simple_columns() {
 }
 
 #[test]
-#[ignore = "parser implementation in progress"]
 fn test_select_null_literal() {
     let sql = "SELECT id, NULL AS middle_name FROM users;";
     let expected = SqlAction::Select(Box::new(simple_select(
@@ -320,7 +312,6 @@ fn test_select_null_literal() {
 }
 
 #[test]
-#[ignore = "parser implementation in progress"]
 fn test_select_distinct_with_aliases() {
     let sql = "SELECT DISTINCT u.id AS user_id, u.name FROM users AS u;";
     let expected = SqlAction::Select(Box::new(SqlQuery::Basic {
@@ -339,7 +330,6 @@ fn test_select_distinct_with_aliases() {
 }
 
 #[test]
-#[ignore = "parser implementation in progress"]
 fn test_select_arithmetic_expressions() {
     let sql = "SELECT price * 1.1 + 5 - -discount / 2 FROM products;";
     let expected_expr = Expression::Subtract(
@@ -362,7 +352,6 @@ fn test_select_arithmetic_expressions() {
 }
 
 #[test]
-#[ignore = "parser implementation in progress"]
 fn test_select_with_complex_where() {
     let sql = "SELECT id FROM users WHERE age >= 18 AND status = 'active' OR NOT deleted = true;";
     let where_pred = Predicate::Or(
@@ -398,7 +387,6 @@ fn test_select_with_complex_where() {
 }
 
 #[test]
-#[ignore = "parser implementation in progress"]
 fn test_select_where_null_between_like() {
     let sql = "SELECT id FROM items WHERE description IS NOT NULL AND price BETWEEN 10 AND 50 AND name LIKE 'A%';";
     let where_pred = Predicate::And(
@@ -430,7 +418,6 @@ fn test_select_where_null_between_like() {
 // =========================================================================
 
 #[test]
-#[ignore = "parser implementation in progress"]
 fn test_select_aggregates_and_functions() {
     let sql = "SELECT COUNT(*), COUNT(DISTINCT id), SUM(amount), AVG(score), MIN(low), MAX(high), COALESCE(bonus, 0) FROM stats;";
     let expected_items = vec![
@@ -461,7 +448,6 @@ fn test_select_aggregates_and_functions() {
 }
 
 #[test]
-#[ignore = "parser implementation in progress"]
 fn test_select_group_by_having_order_by() {
     let sql = "SELECT dept, COUNT(*) AS emp_count FROM employees GROUP BY dept HAVING COUNT(*) > 5 ORDER BY emp_count DESC, dept ASC;";
     let expected = SqlAction::Select(Box::new(SqlQuery::Basic {
@@ -505,7 +491,6 @@ fn test_select_group_by_having_order_by() {
 // =========================================================================
 
 #[test]
-#[ignore = "parser implementation in progress"]
 fn test_cross_join() {
     let sql = "SELECT a.x, b.y FROM a CROSS JOIN b;";
     let expected = SqlAction::Select(Box::new(simple_select(
@@ -520,7 +505,6 @@ fn test_cross_join() {
 }
 
 #[test]
-#[ignore = "parser implementation in progress"]
 fn test_implicit_cross_join_comma() {
     // SQL-89 comma syntax: FROM a, b is an implicit cross join
     let sql = "SELECT a.x, b.y FROM a, b;";
@@ -536,7 +520,6 @@ fn test_implicit_cross_join_comma() {
 }
 
 #[test]
-#[ignore = "parser implementation in progress"]
 fn test_implicit_cross_join_multiple_tables_with_where() {
     // Comma join of 3 tables with classic SQL-89 style WHERE join condition
     let sql = "SELECT * FROM a, b, c WHERE a.id = b.a_id AND b.id = c.b_id;";
@@ -572,7 +555,6 @@ fn test_implicit_cross_join_multiple_tables_with_where() {
 }
 
 #[test]
-#[ignore = "parser implementation in progress"]
 fn test_inner_join() {
     let sql = "SELECT u.name, o.id FROM users AS u INNER JOIN orders AS o ON u.id = o.user_id;";
     let expected = SqlAction::Select(Box::new(simple_select(
@@ -594,7 +576,6 @@ fn test_inner_join() {
 }
 
 #[test]
-#[ignore = "parser implementation in progress"]
 fn test_left_right_full_outer_joins() {
     let sql = "SELECT * FROM a LEFT JOIN b ON a.id = b.id;";
     let expected = SqlAction::Select(Box::new(simple_select(
@@ -653,7 +634,6 @@ fn test_left_right_full_outer_joins() {
 // =========================================================================
 
 #[test]
-#[ignore = "parser implementation in progress"]
 fn test_set_operations() {
     let q1 = simple_select(vec![item(col("id"))], tbl("table_a"));
     let q2 = simple_select(vec![item(col("id"))], tbl("table_b"));
@@ -706,7 +686,6 @@ fn test_set_operations() {
 // =========================================================================
 
 #[test]
-#[ignore = "parser implementation in progress"]
 fn test_subquery_in_from_clause() {
     let sql = "SELECT sub.id FROM (SELECT id FROM users) AS sub;";
     let inner_query = simple_select(vec![item(col("id"))], tbl("users"));
@@ -723,7 +702,6 @@ fn test_subquery_in_from_clause() {
 }
 
 #[test]
-#[ignore = "parser implementation in progress"]
 fn test_subquery_in_where_in_list_and_query() {
     // IN (List)
     let sql_list = "SELECT id FROM users WHERE status_code IN (1, 2, 3);";
@@ -765,9 +743,8 @@ fn test_subquery_in_where_in_list_and_query() {
 }
 
 #[test]
-#[ignore = "parser implementation in progress"]
 fn test_subquery_exists_all_any() {
-    let inner_query = simple_select(vec![item(col("1"))], tbl("orders"));
+    let inner_query = simple_select(vec![item(int_lit(1))], tbl("orders"));
     let sub = SubQuery {
         sub_query: Box::new(inner_query),
         imported_variables: vec![],
@@ -815,7 +792,6 @@ fn test_subquery_exists_all_any() {
 // =========================================================================
 
 #[test]
-#[ignore = "parser implementation in progress"]
 fn test_insert_values_single_and_multi_row() {
     let sql = "INSERT INTO users (id, name, active) VALUES (1, 'Alice', true), (2, 'Bob', NULL);";
     let expected = SqlAction::Insert {
@@ -831,7 +807,6 @@ fn test_insert_values_single_and_multi_row() {
 }
 
 #[test]
-#[ignore = "parser implementation in progress"]
 fn test_insert_into_from_select() {
     let sql = "INSERT INTO archive_users (id, name) SELECT id, name FROM users;";
     let select_query = simple_select(
@@ -848,7 +823,6 @@ fn test_insert_into_from_select() {
 }
 
 #[test]
-#[ignore = "parser implementation in progress"]
 fn test_update_statement() {
     let sql = "UPDATE users SET name = 'Charlie', age = 30 WHERE id = 1;";
     let mut value_map = HashMap::new();
@@ -869,7 +843,6 @@ fn test_update_statement() {
 }
 
 #[test]
-#[ignore = "parser implementation in progress"]
 fn test_update_statement_with_null() {
     let sql = "UPDATE users SET status = NULL WHERE id = 1;";
     let mut value_map = HashMap::new();
@@ -889,7 +862,6 @@ fn test_update_statement_with_null() {
 }
 
 #[test]
-#[ignore = "parser implementation in progress"]
 fn test_delete_statement_with_and_without_where() {
     let sql_where = "DELETE FROM users WHERE id = 42;";
     let expected_where = SqlAction::Delete {
@@ -908,4 +880,40 @@ fn test_delete_statement_with_and_without_where() {
         where_clause: None,
     };
     assert_eq!(parse(sql_all).unwrap(), expected_all);
+}
+
+// =========================================================================
+// 9. VIEWS (CREATE VIEW, MATERIALIZED VIEW, DROP VIEW)
+// =========================================================================
+
+#[test]
+fn test_create_and_drop_view() {
+    let sql_view = "CREATE VIEW active_users AS SELECT id, name FROM users;";
+    let expected_view = SqlAction::CreateView {
+        name: "active_users".to_string(),
+        material: false,
+        as_query: Box::new(simple_select(
+            vec![item(col("id")), item(col("name"))],
+            tbl("users"),
+        )),
+    };
+    assert_eq!(parse(sql_view).unwrap(), expected_view);
+
+    let sql_mat_view = "CREATE MATERIALIZED VIEW mat_users AS SELECT id FROM users;";
+    let expected_mat_view = SqlAction::CreateView {
+        name: "mat_users".to_string(),
+        material: true,
+        as_query: Box::new(simple_select(
+            vec![item(col("id"))],
+            tbl("users"),
+        )),
+    };
+    assert_eq!(parse(sql_mat_view).unwrap(), expected_mat_view);
+
+    let sql_drop = "DROP VIEW IF EXISTS active_users;";
+    let expected_drop = SqlAction::DropView {
+        name: "active_users".to_string(),
+        if_exists: true,
+    };
+    assert_eq!(parse(sql_drop).unwrap(), expected_drop);
 }

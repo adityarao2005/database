@@ -1,0 +1,8 @@
+[package]
+name = "engine"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+sql_query_parser = { path = "../sql_query_parser" }
+storage = { path = "../storage" }

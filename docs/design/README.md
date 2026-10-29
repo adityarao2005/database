@@ -38,7 +38,7 @@ classDiagram
     namespace remote {
         class RemoteEngine
     }
-    
+
     Engine <|-- LocalEngine
     Engine <|-- RemoteEngine
 
@@ -107,4 +107,21 @@ classDiagram
     Statement --> "0.." ResultSet: generates async
     Engine --> "0.." Statement
 ```
+
+## SQL String Parser
+
+From the Database client we must be able to parse the SQL string and generate an AST which we can send over to the Engine to perform queries and mutations on. This happens on `Client.prepare_sql` when we generate the statement. We can model this as follows:
+
+```mermaid
+flowchart LR
+    prepare_sql["Client.prepare_sql"] --> | Parse valid SQL tokens | Lexer
+    Lexer --> | Generate Abstract Syntax Tree from SQL Tokens | Parser
+    Parser --> |AST Generated, create statement| Statement["new Statement"]
+```
+
+More details regarding the Lexer and Parser semantics, see [here](./sql_query_parser.md).
+
+## Remote Storage
+
+## Local Storage
 

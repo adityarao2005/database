@@ -17,3 +17,6 @@ version = "0.1.0"
 [[package]]
 name = "storage"
 version = "0.1.0"
+dependencies = [
+ "sql_query_parser",
+]

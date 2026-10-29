@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use sql_query_parser::action::SqlAction;
 use sql_query_parser::ddl::{KeyConstraint, TupleEntryDataType, TupleSchemaEntry};
 use sql_query_parser::dml::select::{
-    GroupBy, JoinType, Order, OrderClause, OrderBy, SelectItem, SqlQuery, SubQuery, TableRef,
+    BasicSqlQuery, GroupBy, JoinType, Order, OrderBy, OrderClause, SelectItem, SqlQuery, SubQuery, TableRef,
 };
 use sql_query_parser::expression::{
     AggregateValues, Comparison, Expression, InValue, Literal, Predicate,
@@ -72,14 +72,14 @@ fn item_alias(expr: Expression, alias: &str) -> SelectItem {
 }
 
 fn simple_select(select: Vec<SelectItem>, from: TableRef) -> SqlQuery {
-    SqlQuery::Basic {
+    SqlQuery::Basic(BasicSqlQuery {
         select,
         distinct: false,
         from,
         where_clause: None,
         group_by: None,
         order: None,
-    }
+    })
 }
 
 // =========================================================================
@@ -314,7 +314,7 @@ fn test_select_null_literal() {
 #[test]
 fn test_select_distinct_with_aliases() {
     let sql = "SELECT DISTINCT u.id AS user_id, u.name FROM users AS u;";
-    let expected = SqlAction::Select(Box::new(SqlQuery::Basic {
+    let expected = SqlAction::Select(Box::new(SqlQuery::Basic(BasicSqlQuery {
         select: vec![
             item_alias(table_col("u", "id"), "user_id"),
             item(table_col("u", "name")),
@@ -324,7 +324,7 @@ fn test_select_distinct_with_aliases() {
         where_clause: None,
         group_by: None,
         order: None,
-    }));
+    })));
 
     assert_eq!(parse(sql).unwrap(), expected);
 }
@@ -374,14 +374,14 @@ fn test_select_with_complex_where() {
         )))),
     );
 
-    let expected = SqlAction::Select(Box::new(SqlQuery::Basic {
+    let expected = SqlAction::Select(Box::new(SqlQuery::Basic(BasicSqlQuery {
         select: vec![item(col("id"))],
         distinct: false,
         from: tbl("users"),
         where_clause: Some(where_pred),
         group_by: None,
         order: None,
-    }));
+    })));
 
     assert_eq!(parse(sql).unwrap(), expected);
 }
@@ -401,14 +401,14 @@ fn test_select_where_null_between_like() {
         Box::new(Predicate::Like(Box::new(col("name")), "A%".to_string())),
     );
 
-    let expected = SqlAction::Select(Box::new(SqlQuery::Basic {
+    let expected = SqlAction::Select(Box::new(SqlQuery::Basic(BasicSqlQuery {
         select: vec![item(col("id"))],
         distinct: false,
         from: tbl("items"),
         where_clause: Some(where_pred),
         group_by: None,
         order: None,
-    }));
+    })));
 
     assert_eq!(parse(sql).unwrap(), expected);
 }
@@ -450,7 +450,7 @@ fn test_select_aggregates_and_functions() {
 #[test]
 fn test_select_group_by_having_order_by() {
     let sql = "SELECT dept, COUNT(*) AS emp_count FROM employees GROUP BY dept HAVING COUNT(*) > 5 ORDER BY emp_count DESC, dept ASC;";
-    let expected = SqlAction::Select(Box::new(SqlQuery::Basic {
+    let expected = SqlAction::Select(Box::new(SqlQuery::Basic(BasicSqlQuery {
         select: vec![
             item(col("dept")),
             item_alias(
@@ -481,7 +481,7 @@ fn test_select_group_by_having_order_by() {
                 },
             ],
         }),
-    }));
+    })));
 
     assert_eq!(parse(sql).unwrap(), expected);
 }
@@ -536,7 +536,7 @@ fn test_implicit_cross_join_multiple_tables_with_where() {
         )),
     );
 
-    let expected = SqlAction::Select(Box::new(SqlQuery::Basic {
+    let expected = SqlAction::Select(Box::new(SqlQuery::Basic(BasicSqlQuery {
         select: vec![item(col("*"))],
         distinct: false,
         from: TableRef::Join {
@@ -549,7 +549,7 @@ fn test_implicit_cross_join_multiple_tables_with_where() {
         where_clause: Some(where_pred),
         group_by: None,
         order: None,
-    }));
+    })));
 
     assert_eq!(parse(sql).unwrap(), expected);
 }
@@ -705,7 +705,7 @@ fn test_subquery_in_from_clause() {
 fn test_subquery_in_where_in_list_and_query() {
     // IN (List)
     let sql_list = "SELECT id FROM users WHERE status_code IN (1, 2, 3);";
-    let expected_list = SqlAction::Select(Box::new(SqlQuery::Basic {
+    let expected_list = SqlAction::Select(Box::new(SqlQuery::Basic(BasicSqlQuery {
         select: vec![item(col("id"))],
         distinct: false,
         from: tbl("users"),
@@ -719,13 +719,13 @@ fn test_subquery_in_where_in_list_and_query() {
         )),
         group_by: None,
         order: None,
-    }));
+    })));
     assert_eq!(parse(sql_list).unwrap(), expected_list);
 
     // IN (SubQuery)
     let sql_sub = "SELECT id FROM users WHERE dept_id IN (SELECT id FROM departments);";
     let inner_query = simple_select(vec![item(col("id"))], tbl("departments"));
-    let expected_sub = SqlAction::Select(Box::new(SqlQuery::Basic {
+    let expected_sub = SqlAction::Select(Box::new(SqlQuery::Basic(BasicSqlQuery {
         select: vec![item(col("id"))],
         distinct: false,
         from: tbl("users"),
@@ -738,7 +738,7 @@ fn test_subquery_in_where_in_list_and_query() {
         )),
         group_by: None,
         order: None,
-    }));
+    })));
     assert_eq!(parse(sql_sub).unwrap(), expected_sub);
 }
 
@@ -752,38 +752,38 @@ fn test_subquery_exists_all_any() {
 
     // EXISTS
     let sql_exists = "SELECT id FROM users WHERE EXISTS (SELECT 1 FROM orders);";
-    let expected_exists = SqlAction::Select(Box::new(SqlQuery::Basic {
+    let expected_exists = SqlAction::Select(Box::new(SqlQuery::Basic(BasicSqlQuery {
         select: vec![item(col("id"))],
         distinct: false,
         from: tbl("users"),
         where_clause: Some(Predicate::Exists(Box::new(sub.clone()))),
         group_by: None,
         order: None,
-    }));
+    })));
     assert_eq!(parse(sql_exists).unwrap(), expected_exists);
 
     // ALL
     let sql_all = "SELECT id FROM users WHERE salary > ALL (SELECT 1 FROM orders);";
-    let expected_all = SqlAction::Select(Box::new(SqlQuery::Basic {
+    let expected_all = SqlAction::Select(Box::new(SqlQuery::Basic(BasicSqlQuery {
         select: vec![item(col("id"))],
         distinct: false,
         from: tbl("users"),
         where_clause: Some(Predicate::All(Comparison::GreaterThan, Box::new(col("salary")), Box::new(sub.clone()))),
         group_by: None,
         order: None,
-    }));
+    })));
     assert_eq!(parse(sql_all).unwrap(), expected_all);
 
     // ANY
     let sql_any = "SELECT id FROM users WHERE salary = ANY (SELECT 1 FROM orders);";
-    let expected_any = SqlAction::Select(Box::new(SqlQuery::Basic {
+    let expected_any = SqlAction::Select(Box::new(SqlQuery::Basic(BasicSqlQuery {
         select: vec![item(col("id"))],
         distinct: false,
         from: tbl("users"),
         where_clause: Some(Predicate::Any(Comparison::Equals, Box::new(col("salary")), Box::new(sub))),
         group_by: None,
         order: None,
-    }));
+    })));
     assert_eq!(parse(sql_any).unwrap(), expected_any);
 }
 

@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use crate::action::SqlAction;
 use crate::ddl::{KeyConstraint, TupleEntryDataType, TupleSchemaEntry};
 use crate::dml::select::{
-    GroupBy, JoinType, Order, OrderClause, OrderBy, SelectItem, SqlQuery, SubQuery, TableRef,
+    BasicSqlQuery, GroupBy, JoinType, Order, OrderBy, OrderClause, SelectItem, SqlQuery, SubQuery, TableRef,
 };
 use crate::error::ParseError;
 use crate::expression::{
@@ -528,14 +528,14 @@ impl Parser {
             None
         };
 
-        Ok(SqlQuery::Basic {
+        Ok(SqlQuery::Basic(BasicSqlQuery {
             select,
             distinct,
             from,
             where_clause,
             group_by,
             order,
-        })
+        }))
     }
 
     fn is_non_keyword_identifier(&self) -> bool {

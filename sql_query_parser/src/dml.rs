@@ -28,19 +28,22 @@ pub mod select {
     #[derive(Debug, PartialEq, Clone)]
     pub struct SelectItem {
         pub expr: Expression,
-        pub alias: Option<String>
+        pub alias: Option<String>,
+    }
+
+    #[derive(Debug, PartialEq, Clone)]
+    pub struct BasicSqlQuery {
+        pub select: Vec<SelectItem>,
+        pub distinct: bool,
+        pub from: TableRef,
+        pub where_clause: Option<Predicate>,
+        pub group_by: Option<GroupBy>,
+        pub order: Option<OrderBy>,
     }
 
     #[derive(Debug, PartialEq, Clone)]
     pub enum SqlQuery {
-        Basic {
-            select: Vec<SelectItem>,
-            distinct: bool,
-            from: TableRef,
-            where_clause: Option<Predicate>,
-            group_by: Option<GroupBy>,
-            order: Option<OrderBy>,
-        },
+        Basic(BasicSqlQuery),
         Union(Box<SqlQuery>, Box<SqlQuery>),
         UnionAll(Box<SqlQuery>, Box<SqlQuery>),
         Intersect(Box<SqlQuery>, Box<SqlQuery>),
@@ -59,11 +62,11 @@ pub mod select {
     pub enum TableRef {
         Table {
             name: String,
-            alias: Option<String>
+            alias: Option<String>,
         },
         SubQuery {
             query: Box<SqlQuery>,
-            alias: String
+            alias: String,
         },
         Join {
             relation: Box<TableRef>,

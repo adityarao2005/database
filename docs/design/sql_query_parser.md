@@ -171,3 +171,9 @@ LITERAL_LIST := LITERAL + (WS + "," + WS + LITERAL)*
 ```
 
 ## Parser operations
+
+```mermaid
+stateDiagram-v2
+    [*] --> StringInputed
+    StringInputed --> StringInputed: WS
+```

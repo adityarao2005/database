@@ -4,8 +4,8 @@ Motivation behind this is to apply concepts learned in SFWRENG 3DB3 Databases co
 
 ## Design Docs
 
-You may find design docs in [here](./docs/design/)
+You may find design docs in [here](./docs/design/README.md)
 
 ## Usage
 
-You may find usage docs in [here](./docs/usage/)
+You may find usage docs in [here](./docs/usage/README.md)

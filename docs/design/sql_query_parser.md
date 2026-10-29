@@ -174,6 +174,38 @@ LITERAL_LIST := LITERAL + (WS + "," + WS + LITERAL)*
 
 ```mermaid
 stateDiagram-v2
-    [*] --> StringInputed
-    StringInputed --> StringInputed: WS
+    
+    [*] --> OperationCheck
+    OperationCheck --> OperationCheck: cannot deduce token
+    OperationCheck --> Select: select
+    OperationCheck --> Insert: insert
+    OperationCheck --> Update: update
+    OperationCheck --> Delete: delete
+    OperationCheck --> Create: create
+    OperationCheck --> Drop: drop
+    OperationCheck --> SetSelect: "("
+
+    state Select {
+    }
+
+    state Insert {
+    }
+
+    state Update {
+    }
+
+    state Delete {
+    }
+
+    state Create {
+    }
+
+    state Drop {
+    }
+
+    state SetSelect {
+        [*] --> SetSelect
+        SetSelect --> SetSelect: "("
+        SetSelect --> Select: select
+    }
 ```

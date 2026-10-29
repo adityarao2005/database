@@ -1,6 +1,9 @@
 # Design of the Database
 
-Database access can be modeled by either of these means.
+## Interaction between User and Database
+
+The user can interact with the database as shown below:
+
 ```mermaid
 flowchart LR
     User[User] --> |client| Access{Access Database}
@@ -10,7 +13,10 @@ flowchart LR
     NetworkClient --> |connects to| Standalone
 ```
 
-Client can be modeled as shown:
+## Database Client
+
+The database client can be modeled as follows:
+
 ```mermaid
 classDiagram
 
@@ -25,6 +31,14 @@ classDiagram
         <<interface>>
     }
 
+    namespace local {
+        class LocalEngine
+    }
+
+    namespace remote {
+        class RemoteEngine
+    }
+    
     Engine <|-- LocalEngine
     Engine <|-- RemoteEngine
 
@@ -93,3 +107,4 @@ classDiagram
     Statement --> "0.." ResultSet: generates async
     Engine --> "0.." Statement
 ```
+

@@ -23,8 +23,7 @@ classDiagram
     class Client {
         +initialize() async
         +shutdown() async
-
-        +prepare_sql(String sql) async Statement
+        +connect() async Connection
     }
 
     class Engine {
@@ -42,14 +41,20 @@ classDiagram
     Engine <|-- LocalEngine
     Engine <|-- RemoteEngine
 
+    class Connection {
+        +prepare_sql(String sql) async Statement
+        +execute(Statement statement, Values parameters) async ExecutionResult
+        +begin_transaction() async Transaction
+    }
+
     class Transaction {
+        +prepare_sql(String sql) async Statement
+        +execute(Statement statement, Values parameters) async ExecutionResult
         +commit() async
         +rollback() async
     }
 
-    class Statement {
-        +execute(Values parameters) async ExecutionResult
-    }
+    class Statement
 
     class ResultSet {
         +int rows
@@ -103,16 +108,30 @@ classDiagram
     ResultSet *-->  "0.." ColumnDetail
     ResultSet *--> "0.." Tuple: async iterator of
 
-    Client *--> Engine 
-    Client --> "0.." Transaction
-    Client *--> "0.." Statement
-    Statement --> "0.." ResultSet: generates async
-    Engine --> "0.." Statement: executes
+    Client *--> Engine
+    Client --> "0.." Connection: opens
+    Connection --> Engine: uses
+    Connection --> "0..1" Transaction: active transaction
+    Connection --> "0.." Statement: prepares
+    Transaction --> Statement: prepares and executes
+    Connection --> ResultSet: returns rows when applicable
+    Transaction --> ResultSet: returns rows when applicable
 ```
+
+`Client<E: Engine>` is the database handle: it owns backend configuration and
+initialization/shutdown, and opens independent connections. A `Connection` is one
+logical session. It may use a socket for a remote backend; an embedded connection
+needs no socket. Connections share the underlying local engine and storage while
+keeping their session and transaction state separate.
+
+A transaction is a unit of work within a connection, not a replacement for that
+connection. Preparation belongs to the connection and is also exposed through a
+transaction. Execution goes through `Connection.execute` or `Transaction.execute`
+so its transaction context is explicit; a statement does not choose that context.
 
 ## SQL String Parser
 
-`Client.prepare_sql(sql)` delegates preparation to its backend. With an embedded
+`Connection.prepare_sql(sql)` delegates preparation to its backend/session. With an embedded
 local engine, parsing happens in the application process. With a remote engine,
 the client sends SQL to the server and the server's local engine parses it. The
 server validates names and types against its catalog and may create an execution
@@ -124,7 +143,7 @@ This lets the AST evolve without making each parser change a protocol change.
 
 ```mermaid
 flowchart LR
-    Client["Client.prepare_sql(sql)"] --> Backend{"Backend"}
+    Connection["Connection.prepare_sql(sql)"] --> Backend{"Backend"}
     Backend --> |embedded| Local["Local engine"]
     Backend --> |remote: send SQL| Server["Server session / local engine"]
     Local --> Parse["Lexer and parser: SQL to AST"]
@@ -167,23 +186,40 @@ classDiagram
     class Engine {
         <<interface>>
 
-        %% statement and transactional
-        +prepare_sql(sql) async Statement
-        +begin_transaction() async Transaction
-
-        %% dml
-        +execute(statement, parameters) async ExecutionResult
+        +open_session() async Session
+        +prepare(session, sql) async PreparedHandle
+        +begin_transaction(session) async TransactionHandle
+        +execute(session, transaction_context, statement, parameters) async ExecutionResult
+        +commit(session, transaction) async
+        +rollback(session, transaction) async
     }
 ```
 
-The shared Rust `Engine` trait exposes preparation and execution for both backends.
-`Statement.execute(parameters)` delegates to its associated backend/session. The
-local engine dispatches over `SqlAction` internally; AST nodes do not invoke an
-engine visitor. Begin with a generic `Client<E: Engine>` for backend selection at
-compile time. Runtime trait-object dispatch can be introduced if needed.
+The planned shared Rust `Engine` trait provides the backend operations shown
+above; `Session`, `PreparedHandle`, and `TransactionHandle` are backend-specific
+handles. `Connection` and `Transaction` wrap these operations for application code.
+Begin with a generic `Client<E: Engine>` for backend selection at compile time.
+Runtime trait-object dispatch can be introduced if needed.
 
-Transactions are session-bound handles with `commit` and `rollback` operations;
-statements executed through a transaction use its session and transaction context.
+`Connection.execute` outside an explicit transaction starts an implicit transaction
+and commits successful work or rolls it back on failure. For streamed results,
+completion includes consuming or closing the result stream; the implementation
+must define cleanup for abandoned streams before releasing the transaction.
+`Transaction.execute` always uses that transaction's session and transaction handle.
+Commit and rollback end the transaction; further operations through it are invalid.
+
+In Rust, start with `Transaction<'conn>` borrowing `&mut Connection` to prevent
+unrelated operations on that connection while a transaction is active. Pass the
+transaction explicitly to helper functions. Dropping an unfinished transaction
+must arrange rollback before the session can be reused; async cleanup must be
+handled by the backend rather than assuming `Drop` can await.
+
+Prepared statements are valid only on their originating session and must be
+rejected on other connections. Initially, statements prepared through a transaction
+may be restricted to its lifetime. A connection-prepared statement may be executed
+through a transaction on that same connection. Handles must also be invalidated or
+revalidated when schema changes make their prepared metadata or plans stale.
+
 Execution returns a fallible result containing either row metadata and a row stream,
 or command completion with an affected-row count where applicable. DDL does not
 need to manufacture a result set.
@@ -194,10 +230,93 @@ coordinates schema and storage updates. Index maintenance also happens during
 INSERT, UPDATE, and DELETE. These are planned engine responsibilities; the current
 engine crate remains a scaffold.
 
+
 ### Local Storage
 
+The local storage can be organized as shown:
 
+```mermaid
+classDiagram
+    class Engine {
+        <<interface>>
+        +open_session() async Session
+        +prepare(session, sql) async PreparedHandle
+        +begin_transaction(session) async TransactionHandle
+        +execute(session, transaction_context, statement, parameters) async ExecutionResult
+        +commit(session, transaction) async
+        +rollback(session, transaction) async
+    }
+
+    class LocalEngine {
+
+
+    }
+
+    Engine <|-- LocalEngine
+
+    class LocalSession {
+        Session settings and prepared handles
+    }
+
+    class LocalTransaction {
+        Transaction state and storage context
+    }
+
+    LocalEngine --> "0.." LocalSession: opens
+    LocalSession --> "0..1" LocalTransaction: active transaction
+    LocalSession --> LocalEngine: shared database state
+    LocalEngine --> QueryHandler
+
+    class TableStorageClass {
+        <<interface>>
+    }
+
+    LocalEngine *--> TableStorageClass
+    TableStorageClass -- Table: factory for
+    LocalEngine --> "0.." Table
+
+    class Table {
+        +String name
+    }
+
+    Table --> "0.." ColumnDetail: columns
+    Table --> "0.." Tuple: tuples
+    Table --> "0.." Index: indexes
+    Table --> PageManager
+
+    class ColumnDetail {
+        note: refer to above for details on implementation
+    }
+
+    class Index {
+        <<interface>>
+
+        +queryValue(Value value) Page
+    }
+
+    Index --> "0.." ColumnDetail: index on
+    Index --> PageManager
+
+    class PageManager {
+        queryPage(Page) async Tuple
+        updatePage(Page, Tuple) async
+        insertPage(Tuple) async Page
+    }
+
+```
+
+The local engine owns shared database state: catalog, tables, indexes, and the
+page/storage manager. It must not hold a single global current transaction.
+Each local session identifies its own active transaction, and execution passes
+that context down to storage. Commit/rollback need actual storage support for
+atomicity and isolation; adding session handles alone does not provide those
+properties. Transactional DDL and catalog updates must participate in the same
+commit/rollback mechanism when supported.
+
+The current `engine/src/lib.rs` contains only the generated `add` function and its
+test. These engine/session interfaces and transaction semantics are design targets,
+not implemented functionality.
 
 ### Remote Storage
 
-Remote storage means there is an instance of the database running a specific protocol on the network. On the other end of the network would be local storage or a custom engine which stores this another way.
+Remote storage means there is an instance of the database running a specific protocol on the network. On the other end of the network would be local storage or a custom engine which stores this another way. This requires an instance of the "standalone" sql db to be running at an address. More info about this [here](./remote_sql_db.md).

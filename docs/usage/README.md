@@ -1,69 +1,66 @@
+# Planned Database Usage
+
+These examples illustrate the proposed API; the engine crate is currently a
+scaffold and does not implement it yet. `Value` and `Error` below stand for the
+planned database value and error types.
 
 ## Embedded into Application
 
-```rust
-use database::{SQLDatabaseClient};
-use database::engine::{LocalEngine, FileStorage}
-//...
+A client owns the shared database backend. Each connection is a separate logical
+session, including for embedded use.
 
-let client = SQLDatabaseClient {
-    engine: LocalEngine {
-        storage: FileStorage {
-            path: "./db",
-        }
-    }
+```rust,ignore
+let client = Client::new(LocalEngine::open("./db").await?);
+let mut conn = client.connect().await?;
+
+// Outside an explicit transaction, execution uses autocommit.
+let stmt = conn.prepare_sql("SELECT * FROM users WHERE name = ?").await?;
+let rows = conn.execute(&stmt, &[Value::from("Aditya Rao")]).await?;
+// Consume or close a row stream before starting more work on the connection.
+drop(rows);
+
+async fn do_work(tx: &mut Transaction<'_>) -> Result<(), Error> {
+    let stmt = tx.prepare_sql("UPDATE users SET name = ? WHERE id = ?").await?;
+    tx.execute(&stmt, &[Value::from("Aditya Rao"), Value::from(42)]).await?;
+    Ok(())
 }
 
-client.initialize().await?
-
-async fn perform_transactionally() {
-    let tx = client.begin_transaction().await
-
-    if do_work() {
-        tx.commit().await;
-    } else {
-        tx.rollback().await;
+let mut tx = conn.begin_transaction().await?;
+match do_work(&mut tx).await {
+    Ok(()) => tx.commit().await?,
+    Err(error) => {
+        tx.rollback().await?;
+        return Err(error);
     }
 }
-
-// running on its own without beginning a transaction will create and commit the transaction
-async fn do_work() {
-
-    let statement = sql!(client, "SELECT * from table where name = :name", {
-        name: "Aditya Rao",
-    })
-
-    let result = statement.run().await
-
-    match result {
-        Success() {
-            //...
-        },
-        Error {
-            //...
-        }
-    }
-}
-
-//...
 ```
 
-### Standalone
+Prepared statements belong to their originating connection. Passing `tx` into
+`do_work` ensures its statements execute inside that transaction. Commit or
+rollback ends the transaction and releases the connection for subsequent work.
+Dropping an unfinished transaction must arrange rollback before session reuse.
 
-Standalone application will be running the same "embedded" version, except the entrypoint is attached to a socket. Ideally it should be run like this:
+## Standalone
+
+The planned standalone server embeds the local engine and exposes it over a
+network protocol. It creates a local session for each connected client session.
+A future command might look like:
+
 ```bash
 database start
 ```
-It can also be configured from a json file, it'll use the defaults otherwise.
+
+There is currently no application binary implementing this command.
 
 ## External Client
 
-```rust
-let client = SQLDatabaseClient {
-    engine: RemoteEngine {
-        url: "grpc://localhost:8080"
-    }
-}
+```rust,ignore
+let client = Client::new(RemoteEngine::new("grpc://localhost:8080"));
+let mut conn = client.connect().await?;
+let stmt = conn.prepare_sql("SELECT * FROM users WHERE id = ?").await?;
+let rows = conn.execute(&stmt, &[Value::from(42)]).await?;
 ```
 
-Later we may want to have it clustered but for now we shall make the basic idea.
+The remote connection identifies a server session. Prepared statement IDs and
+transaction handles belong to that session; the server's local engine performs
+preparation and execution. The URL and transport API are illustrative.

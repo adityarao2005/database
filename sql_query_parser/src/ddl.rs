@@ -28,3 +28,34 @@ pub struct TupleSchemaEntry {
     pub not_null: bool,
     pub default: Option<Literal>,
 }
+
+/// One schema change per ALTER TABLE statement.
+#[derive(Debug, PartialEq, Clone)]
+pub enum AlterTableAction {
+    RenameTo(String),
+    AddColumn(TupleSchemaEntry),
+    DropColumn(String),
+    RenameColumn {
+        name: String,
+        new_name: String,
+    },
+    AlterColumn {
+        name: String,
+        action: AlterColumnAction,
+    },
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub enum AlterColumnAction {
+    SetDataType(TupleEntryDataType),
+    SetDefault(Literal),
+    DropDefault,
+    SetNotNull,
+    DropNotNull,
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub enum AlterViewAction {
+    RenameTo(String),
+    As(Box<crate::dml::select::SqlQuery>),
+}

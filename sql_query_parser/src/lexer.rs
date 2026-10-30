@@ -4,6 +4,13 @@ use crate::error::ParseError;
 pub enum Token {
     // Keywords - DDL & Statements
     Create,
+    Index,
+    Alter,
+    Add,
+    Column,
+    Rename,
+    To,
+    Type,
     Table,
     View,
     Materialized,
@@ -319,6 +326,14 @@ pub fn tokenize(input: &str) -> Result<Vec<SpannedToken>, ParseError> {
 
             let token = match upper.as_str() {
                 "CREATE" => Token::Create,
+                "INDEX" => Token::Index,
+                "ALTER" => Token::Alter,
+                "ADD" => Token::Add,
+                "COLUMN" => Token::Column,
+                "RENAME" => Token::Rename,
+                "TO" => Token::To,
+                "TYPE" => Token::Type,
+
                 "TABLE" => Token::Table,
                 "VIEW" => Token::View,
                 "MATERIALIZED" => Token::Materialized,

@@ -917,3 +917,162 @@ fn test_create_and_drop_view() {
     };
     assert_eq!(parse(sql_drop).unwrap(), expected_drop);
 }
+
+#[test]
+fn test_index_ddl() {
+    for (sql, unique, if_not_exists, columns) in [
+        ("CREATE INDEX ix ON users (id)", false, false, vec!["id"]),
+        (
+            "create unique index if not exists ix on users (id, email);",
+            true,
+            true,
+            vec!["id", "email"],
+        ),
+    ] {
+        assert_eq!(
+            parse(sql).unwrap(),
+            SqlAction::CreateIndex {
+                name: "ix".into(),
+                table: "users".into(),
+                columns: columns.into_iter().map(String::from).collect(),
+                unique,
+                if_not_exists,
+            }
+        );
+    }
+    for if_exists in [false, true] {
+        let guard = if if_exists { "IF EXISTS " } else { "" };
+        assert_eq!(
+            parse(&format!("DROP INDEX {guard}ix;")).unwrap(),
+            SqlAction::DropIndex {
+                name: "ix".into(),
+                if_exists
+            }
+        );
+    }
+    assert_eq!(
+        parse("ALTER INDEX ix RENAME TO new_ix").unwrap(),
+        SqlAction::AlterIndex {
+            name: "ix".into(),
+            new_name: "new_ix".into()
+        }
+    );
+}
+
+#[test]
+fn test_alter_table_actions() {
+    use sql_query_parser::ddl::{AlterColumnAction as C, AlterTableAction as T};
+    let cases = vec![
+        ("RENAME TO people", T::RenameTo("people".into())),
+        (
+            "RENAME COLUMN age TO years",
+            T::RenameColumn {
+                name: "age".into(),
+                new_name: "years".into(),
+            },
+        ),
+        (
+            "ADD COLUMN age INT NOT NULL DEFAULT 0",
+            T::AddColumn(TupleSchemaEntry {
+                entry: "age".into(),
+                data_type: TupleEntryDataType::Int,
+                not_null: true,
+                default: Some(Literal::Integer(0)),
+            }),
+        ),
+        (
+            "ADD age INT",
+            T::AddColumn(TupleSchemaEntry {
+                entry: "age".into(),
+                data_type: TupleEntryDataType::Int,
+                not_null: false,
+                default: None,
+            }),
+        ),
+        ("DROP COLUMN age", T::DropColumn("age".into())),
+        ("DROP age", T::DropColumn("age".into())),
+    ];
+    for (clause, action) in cases {
+        assert_eq!(
+            parse(&format!("ALTER TABLE users {clause};")).unwrap(),
+            SqlAction::AlterTable {
+                name: "users".into(),
+                action
+            }
+        );
+    }
+    for (clause, action) in [
+        (
+            "TYPE VARCHAR(30)",
+            C::SetDataType(TupleEntryDataType::VarChar(30)),
+        ),
+        ("SET DEFAULT NULL", C::SetDefault(Literal::Null)),
+        ("DROP DEFAULT", C::DropDefault),
+        ("SET NOT NULL", C::SetNotNull),
+        ("DROP NOT NULL", C::DropNotNull),
+    ] {
+        for column in ["", "COLUMN "] {
+            assert_eq!(
+                parse(&format!("ALTER TABLE users ALTER {column}age {clause}")).unwrap(),
+                SqlAction::AlterTable {
+                    name: "users".into(),
+                    action: T::AlterColumn {
+                        name: "age".into(),
+                        action: action.clone()
+                    }
+                }
+            );
+        }
+    }
+}
+
+#[test]
+fn test_alter_view_actions() {
+    use sql_query_parser::ddl::AlterViewAction;
+    assert_eq!(
+        parse("ALTER VIEW v RENAME TO renamed;").unwrap(),
+        SqlAction::AlterView {
+            name: "v".into(),
+            action: AlterViewAction::RenameTo("renamed".into())
+        }
+    );
+    assert_eq!(
+        parse("ALTER VIEW v AS SELECT id FROM users;").unwrap(),
+        SqlAction::AlterView {
+            name: "v".into(),
+            action: AlterViewAction::As(Box::new(simple_select(
+                vec![item(col("id"))],
+                tbl("users")
+            )))
+        }
+    );
+}
+
+#[test]
+fn test_malformed_index_and_alter_ddl() {
+    for sql in [
+        "CREATE INDEX ix ON users ()",
+        "CREATE UNIQUE INDEX ix ON users (id,)",
+        "CREATE INDEX IF EXISTS ix ON users (id)",
+        "CREATE INDEX ix users (id)",
+        "CREATE UNIQUE TABLE users (id INT)",
+        "DROP INDEX",
+        "DROP INDEX IF NOT EXISTS ix",
+        "ALTER INDEX ix",
+        "ALTER INDEX ix RENAME new_ix",
+        "ALTER TABLE users",
+        "ALTER TABLE users ADD COLUMN age",
+        "ALTER TABLE users DROP COLUMN",
+        "ALTER TABLE users RENAME COLUMN age TO",
+        "ALTER TABLE users ALTER age TYPE",
+        "ALTER TABLE users ALTER age SET NULL",
+        "ALTER TABLE users ALTER age DROP NOT",
+        "ALTER TABLE users ADD age INT, ADD score INT",
+        "ALTER VIEW v AS",
+        "ALTER VIEW v RENAME TO",
+        "ALTER INDEX ix RENAME TO new_ix trailing",
+    ] {
+        let error = parse(sql).expect_err(sql);
+        assert!(error.position.is_some(), "{sql}: {error:?}");
+    }
+}

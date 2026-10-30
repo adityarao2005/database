@@ -105,7 +105,7 @@ classDiagram
     Client --> "0.." Transaction
     Client *--> "0.." Statement
     Statement --> "0.." ResultSet: generates async
-    Engine --> "0.." Statement
+    Engine --> "0.." Statement: executes
 ```
 
 ## SQL String Parser
@@ -121,7 +121,40 @@ flowchart LR
 
 More details regarding the Lexer and Parser semantics, see [here](./sql_query_parser.md).
 
-## Remote Storage
+## Database Engines
 
-## Local Storage
+The database engine is defined with the following class diagram:
+```mermaid
+classDiagram
+    class Engine {
+        <<interface>>
 
+        %% statement and transactional
+        +create_statement(query) async Statement
+        +begin_transaction() async Transaction
+        +commit_transaction() async Transaction
+        +rollback_transaction() async Transaction
+
+        %% dml
+        +handle_select(query) async ResultSet
+        +handle_insert(table, tuples) async ResultSet
+        +handle_delete(table, predicate) async ResultSet
+        +handle_update(table, values, predicate) async ResultSet
+
+        %% ddl
+        +handle_create_table(table, elements) async ResultSet
+        +handle_drop_table(table) async ResultSet
+        +handle_create_view(table, materialized, query) async ResultSet
+        +handle_drop_view(table) async ResultSet
+    }
+```
+
+This is an interface which supports the visitor pattern by having the engine.
+
+### Local Storage
+
+
+
+### Remote Storage
+
+Remote storage means there is an instance of the database running a specific protocol on the network. On the other end of the network would be local storage or a custom engine which stores this another way.

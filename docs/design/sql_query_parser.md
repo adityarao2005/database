@@ -10,7 +10,7 @@ railroad-ebnf-beta
     %% =========================================================================
     %% 1. TOP-LEVEL STATEMENTS
     %% =========================================================================
-    query = [ whitespace ] ( select | insert | update | delete | create | drop ) [ whitespace ] [ ";" [ whitespace ] ] ;
+    query = [ whitespace ] ( select | insert | update | delete | create | drop | alter ) [ whitespace ] [ ";" [ whitespace ] ] ;
 
     %% =========================================================================
     %% 2. DML: SELECT & SET OPERATIONS
@@ -68,9 +68,9 @@ railroad-ebnf-beta
     delete = "delete" whitespace "from" whitespace table_name [ where_clause ] ;
 
     %% =========================================================================
-    %% 6. DDL: CREATE & DROP
+    %% 6. DDL: CREATE, DROP & ALTER
     %% =========================================================================
-    create = "create" whitespace ( create_table | create_view ) ;
+    create = "create" whitespace ( create_table | create_view | create_index ) ;
 
     create_table = "table" [ whitespace "if" whitespace "not" whitespace "exists" ] whitespace table_name [ whitespace ] "(" [ whitespace ] table_elements [ whitespace ] ")" ;
     table_elements = table_element { [ whitespace ] "," [ whitespace ] table_element } ;
@@ -97,9 +97,28 @@ railroad-ebnf-beta
 
     create_view = [ "materialized" whitespace ] "view" whitespace view_name whitespace "as" whitespace ( select | sub_select_query ) ;
 
-    drop = "drop" whitespace ( drop_table | drop_view ) ;
+    drop = "drop" whitespace ( drop_table | drop_view | drop_index ) ;
     drop_table = "table" [ whitespace "if" whitespace "exists" ] whitespace table_name ;
     drop_view = "view" [ whitespace "if" whitespace "exists" ] whitespace view_name ;
+
+    create_index = [ "unique" whitespace ] "index" [ whitespace "if" whitespace "not" whitespace "exists" ] whitespace index_name whitespace "on" whitespace table_name [ whitespace ] "(" [ whitespace ] ident_list [ whitespace ] ")" ;
+    drop_index = "index" [ whitespace "if" whitespace "exists" ] whitespace index_name ;
+
+    alter = "alter" whitespace ( alter_table | alter_index | alter_view ) ;
+    alter_index = "index" whitespace index_name whitespace rename_to ;
+    alter_view = "view" whitespace view_name whitespace ( rename_to | ( "as" whitespace select ) ) ;
+    alter_table = "table" whitespace table_name whitespace alter_table_action ;
+    alter_table_action = rename_to
+                       | ( "add" whitespace [ "column" whitespace ] column_def )
+                       | ( "drop" whitespace [ "column" whitespace ] column_name )
+                       | ( "rename" whitespace "column" whitespace column_name whitespace "to" whitespace column_name )
+                       | ( "alter" whitespace [ "column" whitespace ] column_name whitespace alter_column_action ) ;
+    rename_to = "rename" whitespace "to" whitespace identifier ;
+    alter_column_action = ( "type" whitespace data_type )
+                        | ( "set" whitespace "default" whitespace literal )
+                        | ( "drop" whitespace "default" )
+                        | ( "set" whitespace "not" whitespace "null" )
+                        | ( "drop" whitespace "not" whitespace "null" ) ;
 
     %% =========================================================================
     %% 7. PREDICATES (CONDITIONS)
@@ -157,5 +176,35 @@ railroad-ebnf-beta
     table_name = identifier ;
     column_name = identifier ;
     view_name = identifier ;
+    index_name = identifier ;
 ```
 
+
+## Index and ALTER scope
+
+The lexer recognizes keywords without regard to case. Index definitions contain one
+or more column names and optionally enforce uniqueness. `CREATE INDEX IF NOT EXISTS`
+and `DROP INDEX IF EXISTS` preserve their guards in the AST. Index names are standalone
+identifiers; `DROP INDEX` does not take an `ON table` clause.
+
+Each `ALTER TABLE` statement contains one action: rename the table, add/drop/rename a
+column, change a column type, or set/drop its default or NOT NULL requirement.
+Added columns use the same definition syntax as `CREATE TABLE`. `ALTER INDEX` supports
+renaming. `ALTER VIEW` supports renaming or replacing its SELECT definition using `AS`.
+
+Examples:
+
+```sql
+CREATE UNIQUE INDEX IF NOT EXISTS users_email_idx ON users (email);
+ALTER INDEX users_email_idx RENAME TO email_idx;
+DROP INDEX IF EXISTS email_idx;
+ALTER TABLE users ADD COLUMN score INT DEFAULT 0;
+ALTER TABLE users ALTER COLUMN score SET NOT NULL;
+ALTER TABLE users RENAME COLUMN score TO rating;
+ALTER VIEW active_users AS SELECT id FROM users WHERE active = true;
+```
+
+These statements produce AST values only; storage changes and catalog validation
+(such as checking column existence) belong to the execution layer. Index methods,
+expressions, sort directions, partial indexes, ALTER constraint operations, multiple
+ALTER actions, and ALTER MATERIALIZED VIEW are outside the supported subset.

@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use crate::action::SqlAction;
-use crate::ddl::{KeyConstraint, TupleEntryDataType, TupleSchemaEntry};
+use crate::ddl::{AlterTableAction, AlterColumnAction, AlterViewAction, KeyConstraint, TupleEntryDataType, TupleSchemaEntry};
 use crate::dml::select::{
     BasicSqlQuery, GroupBy, JoinType, Order, OrderBy, OrderClause, SelectItem, SqlQuery, SubQuery, TableRef,
 };
@@ -116,6 +116,7 @@ impl Parser {
         match self.peek() {
             Some(Token::Create) => self.parse_create(),
             Some(Token::Drop) => self.parse_drop(),
+            Some(Token::Alter) => self.parse_alter(),
             Some(Token::Select) => {
                 let query = self.parse_select_query()?;
                 Ok(SqlAction::Select(Box::new(query)))
@@ -124,7 +125,7 @@ impl Parser {
             Some(Token::Update) => self.parse_update(),
             Some(Token::Delete) => self.parse_delete(),
             _ => Err(ParseError::with_position(
-                format!("Expected SQL statement (CREATE, DROP, SELECT, INSERT, UPDATE, DELETE), found {:?}", self.peek()),
+                format!("Expected SQL statement (CREATE, DROP, ALTER, SELECT, INSERT, UPDATE, DELETE), found {:?}", self.peek()),
                 pos,
             )),
         }
@@ -137,6 +138,30 @@ impl Parser {
     fn parse_create(&mut self) -> Result<SqlAction, ParseError> {
         self.expect(&Token::Create, "CREATE")?;
 
+        if self.check(&Token::Unique) || self.check(&Token::Index) {
+            let unique = self.consume(&Token::Unique);
+            self.expect(&Token::Index, "INDEX")?;
+            let if_not_exists = if self.consume(&Token::If) {
+                self.expect(&Token::Not, "NOT")?;
+                self.expect(&Token::Exists, "EXISTS")?;
+                true
+            } else {
+                false
+            };
+            let name = self.expect_identifier("index name")?;
+            self.expect(&Token::On, "ON")?;
+            let table = self.expect_identifier("table name")?;
+            self.expect(&Token::OpenParen, "(")?;
+            let columns = self.parse_identifier_list()?;
+            self.expect(&Token::CloseParen, ")")?;
+            return Ok(SqlAction::CreateIndex {
+                name,
+                table,
+                columns,
+                unique,
+                if_not_exists,
+            });
+        }
         if self.consume(&Token::Table) {
             let if_exists = if self.consume(&Token::If) {
                 self.expect(&Token::Not, "NOT")?;
@@ -186,29 +211,7 @@ impl Parser {
                     self.expect(&Token::CloseParen, ")")?;
                     check.push(pred);
                 } else {
-                    // Column definition
-                    let entry_name = self.expect_identifier("column name")?;
-                    let data_type = self.parse_data_type()?;
-
-                    let not_null = if self.consume(&Token::Not) {
-                        self.expect(&Token::Null, "NULL")?;
-                        true
-                    } else {
-                        false
-                    };
-
-                    let default = if self.consume(&Token::Default) {
-                        Some(self.parse_literal()?)
-                    } else {
-                        None
-                    };
-
-                    entries.push(TupleSchemaEntry {
-                        entry: entry_name,
-                        data_type,
-                        not_null,
-                        default,
-                    });
+                    entries.push(self.parse_column_definition()?);
                 }
 
                 if !self.consume(&Token::Comma) {
@@ -235,6 +238,96 @@ impl Parser {
                 material,
                 as_query,
             })
+        }
+    }
+
+    fn parse_column_definition(&mut self) -> Result<TupleSchemaEntry, ParseError> {
+        let entry = self.expect_identifier("column name")?;
+        let data_type = self.parse_data_type()?;
+        let not_null = if self.consume(&Token::Not) {
+            self.expect(&Token::Null, "NULL")?;
+            true
+        } else {
+            false
+        };
+        let default = if self.consume(&Token::Default) {
+            Some(self.parse_literal()?)
+        } else {
+            None
+        };
+        Ok(TupleSchemaEntry {
+            entry,
+            data_type,
+            not_null,
+            default,
+        })
+    }
+
+    fn parse_rename_target(&mut self) -> Result<String, ParseError> {
+        self.expect(&Token::To, "TO")?;
+        self.expect_identifier("new name")
+    }
+
+    fn parse_alter(&mut self) -> Result<SqlAction, ParseError> {
+        self.expect(&Token::Alter, "ALTER")?;
+        if self.consume(&Token::Index) {
+            let name = self.expect_identifier("index name")?;
+            self.expect(&Token::Rename, "RENAME")?;
+            let new_name = self.parse_rename_target()?;
+            Ok(SqlAction::AlterIndex { name, new_name })
+        } else if self.consume(&Token::View) {
+            let name = self.expect_identifier("view name")?;
+            let action = if self.consume(&Token::Rename) {
+                AlterViewAction::RenameTo(self.parse_rename_target()?)
+            } else {
+                self.expect(&Token::As, "AS or RENAME")?;
+                AlterViewAction::As(Box::new(self.parse_select_query()?))
+            };
+            Ok(SqlAction::AlterView { name, action })
+        } else {
+            self.expect(&Token::Table, "TABLE, VIEW or INDEX")?;
+            let name = self.expect_identifier("table name")?;
+            let action = if self.consume(&Token::Rename) {
+                if self.consume(&Token::Column) {
+                    let name = self.expect_identifier("column name")?;
+                    let new_name = self.parse_rename_target()?;
+                    AlterTableAction::RenameColumn { name, new_name }
+                } else {
+                    AlterTableAction::RenameTo(self.parse_rename_target()?)
+                }
+            } else if self.consume(&Token::Add) {
+                self.consume(&Token::Column);
+                AlterTableAction::AddColumn(self.parse_column_definition()?)
+            } else if self.consume(&Token::Drop) {
+                self.consume(&Token::Column);
+                AlterTableAction::DropColumn(self.expect_identifier("column name")?)
+            } else {
+                self.expect(&Token::Alter, "ADD, DROP, RENAME or ALTER")?;
+                self.consume(&Token::Column);
+                let name = self.expect_identifier("column name")?;
+                let action = if self.consume(&Token::Type) {
+                    AlterColumnAction::SetDataType(self.parse_data_type()?)
+                } else if self.consume(&Token::Set) {
+                    if self.consume(&Token::Default) {
+                        AlterColumnAction::SetDefault(self.parse_literal()?)
+                    } else {
+                        self.expect(&Token::Not, "DEFAULT or NOT NULL")?;
+                        self.expect(&Token::Null, "NULL")?;
+                        AlterColumnAction::SetNotNull
+                    }
+                } else {
+                    self.expect(&Token::Drop, "TYPE, SET or DROP")?;
+                    if self.consume(&Token::Default) {
+                        AlterColumnAction::DropDefault
+                    } else {
+                        self.expect(&Token::Not, "DEFAULT or NOT NULL")?;
+                        self.expect(&Token::Null, "NULL")?;
+                        AlterColumnAction::DropNotNull
+                    }
+                };
+                AlterTableAction::AlterColumn { name, action }
+            };
+            Ok(SqlAction::AlterTable { name, action })
         }
     }
 
@@ -305,6 +398,13 @@ impl Parser {
             };
             let name = self.expect_identifier("table name")?;
             Ok(SqlAction::DropTable { name, if_exists })
+        } else if self.consume(&Token::Index) {
+            let if_exists = if self.consume(&Token::If) {
+                self.expect(&Token::Exists, "EXISTS")?;
+                true
+            } else { false };
+            let name = self.expect_identifier("index name")?;
+            Ok(SqlAction::DropIndex { name, if_exists })
         } else if self.consume(&Token::View) {
             let if_exists = if self.consume(&Token::If) {
                 self.expect(&Token::Exists, "EXISTS")?;
@@ -317,7 +417,7 @@ impl Parser {
         } else {
             let pos = self.current_pos();
             Err(ParseError::with_position(
-                format!("Expected TABLE or VIEW after DROP, found {:?}", self.peek()),
+                format!("Expected TABLE, VIEW or INDEX after DROP, found {:?}", self.peek()),
                 pos,
             ))
         }

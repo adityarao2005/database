@@ -177,17 +177,30 @@ Here's the pseudo-code:
 railroad-ebnf-beta
     title Expression Grammar
 
-    query = select | insert | update | delete | create | drop;
-    select = "select" whitespace ;
-    insert = "insert" whitespace "into" identifier;
-    update = "update" whitespace table;
-    delete = "delete" whitespace "from";
-    create = "create" whitespace;
+    query = whitespace (select | insert | update | delete | create | drop) whitespace ";";
+    
+    select = select_query | sub_select_query whitespace set_operation whitespace sub_select_query;
+    select_query = "select" whitespace ;
+    sub_select_query = "(" whitespace select_query whitespace ")";
+    set_operation = ("union" | "intersect" | "except") (whitespace "all")?;
 
-    drop = "drop" whitespace;
+    insert = "insert" whitespace "into" table_name whitespace sub_select_query;
 
-    table = identifier;
-    view = identifier;
-    identifier = ( letter | digit )+;
+    update = "update" whitespace table_name whitespace "set" whitespace column_name whitespace "=" whitespace value;
+
+    delete = "delete" whitespace "from" whitespace table_name whitespace where_clause?;
+
+    create = "create" whitespace (create_view | create_table);
+    create_view = "materialized"? whitespace "view" whitespace table_name whitespace "as" whitespace sub_select_query;
+    create_table = "table" whitespace view_name;
+
+    drop = "drop" whitespace ("table" whitespace table_name | "view" whitespace view_name) ("if" whitespace "not" whitespace "exists")?;
+
+    table_name = identifier;
+    column_name = identifier;
+    view_name = identifier;
+    
+    literal = string | integer | float | boolean | "null";
+    value = literal | sub_select_query;
 ```
 

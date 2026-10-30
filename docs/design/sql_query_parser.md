@@ -179,21 +179,37 @@ railroad-ebnf-beta
 
     query = whitespace (select | insert | update | delete | create | drop) whitespace ";";
     
+    %% done
     select = select_query | sub_select_query whitespace set_operation whitespace sub_select_query;
+    
     select_query = "select" whitespace ;
+    select_value = (literal | table_col_expor | aggregate "(" whitespace table_col_expr whitespace ")") (whitespace "as" whitespace literal whitespace)?;
+    table_column = column_name | (table_name "." column_name);
+    table_col_expr = table_column | ("(" table_col_expr ")") | table_col_expr ("+" | "*" | "-" | "/") table_col_expr;
+    aggregate = "sum" | "count" | "max" | "min" | "avg" | "product";
+    %% done
     sub_select_query = "(" whitespace select_query whitespace ")";
+    %%done
     set_operation = ("union" | "intersect" | "except") (whitespace "all")?;
 
-    insert = "insert" whitespace "into" table_name whitespace sub_select_query;
+    %% done
+    insert = "insert" whitespace "into" table_name whitespace (insert_values | sub_select_query);
+    insert_values = "values" whitespace value_list (whitespace "," whitespace value_list)*;
 
-    update = "update" whitespace table_name whitespace "set" whitespace column_name whitespace "=" whitespace value;
+    %% done
+    update = "update" whitespace table_name whitespace "set" whitespace column_name whitespace "=" whitespace value where_clause?;
 
+    %% done
     delete = "delete" whitespace "from" whitespace table_name whitespace where_clause?;
 
+    %% done
     create = "create" whitespace (create_view | create_table);
+    %% done
     create_view = "materialized"? whitespace "view" whitespace table_name whitespace "as" whitespace sub_select_query;
+    
     create_table = "table" whitespace view_name;
 
+    %% done
     drop = "drop" whitespace ("table" whitespace table_name | "view" whitespace view_name) ("if" whitespace "not" whitespace "exists")?;
 
     table_name = identifier;
@@ -202,5 +218,6 @@ railroad-ebnf-beta
     
     literal = string | integer | float | boolean | "null";
     value = literal | sub_select_query;
+    value_list = "(" whitespace value (whitespace "," whitespace value)* whitespace ")";
 ```
 

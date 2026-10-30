@@ -172,40 +172,22 @@ LITERAL_LIST := LITERAL + (WS + "," + WS + LITERAL)*
 
 ## Parser operations
 
+Here's the pseudo-code:
 ```mermaid
-stateDiagram-v2
-    
-    [*] --> OperationCheck
-    OperationCheck --> OperationCheck: cannot deduce token
-    OperationCheck --> Select: select
-    OperationCheck --> Insert: insert
-    OperationCheck --> Update: update
-    OperationCheck --> Delete: delete
-    OperationCheck --> Create: create
-    OperationCheck --> Drop: drop
-    OperationCheck --> SetSelect: "("
+railroad-ebnf-beta
+    title Expression Grammar
 
-    state Select {
-    }
+    query = select | insert | update | delete | create | drop;
+    select = "select" whitespace ;
+    insert = "insert" whitespace "into" identifier;
+    update = "update" whitespace table;
+    delete = "delete" whitespace "from";
+    create = "create" whitespace;
 
-    state Insert {
-    }
+    drop = "drop" whitespace;
 
-    state Update {
-    }
-
-    state Delete {
-    }
-
-    state Create {
-    }
-
-    state Drop {
-    }
-
-    state SetSelect {
-        [*] --> SetSelect
-        SetSelect --> SetSelect: "("
-        SetSelect --> Select: select
-    }
+    table = identifier;
+    view = identifier;
+    identifier = ( letter | digit )+;
 ```
+

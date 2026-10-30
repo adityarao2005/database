@@ -147,7 +147,8 @@ railroad-ebnf-beta
     mul_div_expr = unary_expr { [ whitespace ] ( "*" | "/" ) [ whitespace ] unary_expr } ;
     unary_expr = [ "-" [ whitespace ] ] primary_expr ;
 
-    primary_expr = literal
+    primary_expr = parameter
+                 | literal
                  | column_ref
                  | aggregate
                  | function_call
@@ -165,6 +166,8 @@ railroad-ebnf-beta
     %% =========================================================================
     %% 9. LITERALS, IDENTIFIERS & LISTS
     %% =========================================================================
+    parameter = "?" ;
+
     literal = string | number | boolean | "null" ;
     number = integer | float ;
     boolean = "true" | "false" ;
@@ -208,3 +211,35 @@ These statements produce AST values only; storage changes and catalog validation
 (such as checking column existence) belong to the execution layer. Index methods,
 expressions, sort directions, partial indexes, ALTER constraint operations, multiple
 ALTER actions, and ALTER MATERIALIZED VIEW are outside the supported subset.
+
+## Prepared-statement parameters
+
+`?` is a positional value placeholder, tokenized as `Token::Parameter` and parsed
+as `Expression::Parameter(usize)`. Positions start at **1**, increase in source
+order across the entire statement (including subqueries and set-operation branches),
+and restart for each call to `parse`. Each occurrence consumes a distinct position.
+
+```sql
+INSERT INTO users (id, name) VALUES (?, ?);
+UPDATE users SET name = ? WHERE id = ?;
+SELECT id FROM users WHERE age BETWEEN ? AND ?;
+```
+
+The parser builds the AST without requiring parameter values. Binding, parameter
+count/type validation, and execution belong to the engine. Values must be supplied
+separately rather than interpolated into SQL. A `?` inside a string or comment is
+ordinary text and does not allocate a parameter position.
+
+Parameters are accepted wherever the parser accepts an expression, including
+SELECT items, arithmetic, function arguments, INSERT values, UPDATE assignments,
+and comparison/BETWEEN operands. They cannot replace table or column identifiers,
+data types, or other syntax. Existing literal-only positions remain literal-only:
+IN lists, the right-hand LIKE pattern, and column DEFAULT clauses do not yet accept
+parameters. The engine must reject parameters in persisted schema definitions
+(such as view queries or CHECK constraints), even where the expression parser can
+represent them.
+
+Named (`:name`) and numbered (`$1`) placeholders are not parser syntax. A future
+client adapter may normalize them to `?` and map values to occurrence order before
+sending SQL to the local or remote backend. See the [database design](README.md)
+for the preparation and execution lifecycle.

@@ -94,6 +94,9 @@ pub enum Token {
     // Identifiers
     Identifier(String),
 
+    /// Positional prepared-statement value placeholder.
+    Parameter,
+
     // Punctuation & Delimiters
     OpenParen,
     CloseParen,
@@ -196,6 +199,11 @@ pub fn tokenize(input: &str) -> Result<Vec<SpannedToken>, ParseError> {
 
         // Single-character punctuation & operators
         match b {
+            b'?' => {
+                tokens.push(SpannedToken::new(Token::Parameter, start, start + 1));
+                i += 1;
+                continue;
+            }
             b'(' => {
                 tokens.push(SpannedToken::new(Token::OpenParen, start, start + 1));
                 i += 1;
@@ -589,5 +597,22 @@ mod tests {
         let sql = "SELECT 'unterminated";
         let err = tokenize(sql).unwrap_err();
         assert_eq!(err.position, Some(7));
+    }
+}
+
+#[cfg(test)]
+mod parameter_tests {
+    use super::*;
+
+    #[test]
+    fn test_parameter_tokens_ignore_strings_and_comments() {
+        assert_eq!(
+            tokenize("? '?' /* ? */ -- ?\n?").unwrap(),
+            vec![
+                SpannedToken::new(Token::Parameter, 0, 1),
+                SpannedToken::new(Token::StringLiteral("?".into()), 2, 5),
+                SpannedToken::new(Token::Parameter, 19, 20),
+            ]
+        );
     }
 }

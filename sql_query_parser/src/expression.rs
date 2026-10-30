@@ -30,6 +30,8 @@ pub enum AggregateValues {
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum Expression {
+    /// One-based position in statement source order, including nested queries.
+    Parameter(usize),
     Constant(Literal),
     Add(Box<Expression>, Box<Expression>),
     Subtract(Box<Expression>, Box<Expression>),

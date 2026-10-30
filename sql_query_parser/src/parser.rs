@@ -29,11 +29,16 @@ pub fn parse(input: &str) -> Result<SqlAction, ParseError> {
 struct Parser {
     tokens: Vec<SpannedToken>,
     cursor: usize,
+    parameter_count: usize,
 }
 
 impl Parser {
     fn new(tokens: Vec<SpannedToken>) -> Self {
-        Self { tokens, cursor: 0 }
+        Self {
+            tokens,
+            cursor: 0,
+            parameter_count: 0,
+        }
     }
 
     fn is_at_end(&self) -> bool {
@@ -1035,6 +1040,11 @@ impl Parser {
     fn parse_primary_expr(&mut self) -> Result<Expression, ParseError> {
         let pos = self.current_pos();
         match self.peek().cloned() {
+            Some(Token::Parameter) => {
+                self.next();
+                self.parameter_count += 1;
+                Ok(Expression::Parameter(self.parameter_count))
+            }
             Some(Token::IntegerLiteral(n)) => {
                 self.next();
                 Ok(Expression::Constant(Literal::Integer(n)))

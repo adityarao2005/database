@@ -1076,3 +1076,109 @@ fn test_malformed_index_and_alter_ddl() {
         assert!(error.position.is_some(), "{sql}: {error:?}");
     }
 }
+
+#[test]
+fn test_prepared_insert_parameters_and_quoted_text() {
+    assert_eq!(
+        parse("INSERT INTO users (id, name) VALUES (?, '?'), (?, ?); -- ?").unwrap(),
+        SqlAction::Insert {
+            table: "users".into(),
+            columns: vec!["id".into(), "name".into()],
+            value: vec![
+                vec![Expression::Parameter(1), str_lit("?")],
+                vec![Expression::Parameter(2), Expression::Parameter(3)],
+            ],
+        }
+    );
+    // Each parse starts a new numbering sequence.
+    assert_eq!(
+        parse("SELECT ? FROM users").unwrap(),
+        SqlAction::Select(Box::new(simple_select(
+            vec![item(Expression::Parameter(1))],
+            tbl("users"),
+        )))
+    );
+}
+
+#[test]
+fn test_parameter_order_across_subqueries_and_union() {
+    let expected = SqlQuery::Union(
+        Box::new(simple_select(
+            vec![item(Expression::Parameter(1))],
+            TableRef::SubQuery {
+                query: Box::new(simple_select(
+                    vec![item(Expression::Parameter(2))],
+                    tbl("users"),
+                )),
+                alias: "sub".into(),
+            },
+        )),
+        Box::new(simple_select(
+            vec![item(Expression::Parameter(3))],
+            tbl("users"),
+        )),
+    );
+    assert_eq!(
+        parse("SELECT ? FROM (SELECT ? FROM users) AS sub UNION SELECT ? FROM users").unwrap(),
+        SqlAction::Select(Box::new(expected))
+    );
+}
+
+#[test]
+fn test_parameters_in_update_expressions_and_predicates() {
+    let mut value_map = HashMap::new();
+    value_map.insert(
+        "age".into(),
+        Box::new(Expression::Add(
+            Box::new(col("age")),
+            Box::new(Expression::Parameter(1)),
+        )),
+    );
+    assert_eq!(
+        parse("UPDATE users SET age = age + ? WHERE id BETWEEN ? AND ?").unwrap(),
+        SqlAction::Update {
+            table: "users".into(),
+            value_map,
+            where_clause: Some(Box::new(Predicate::Between(
+                Box::new(col("id")),
+                Box::new(Expression::Parameter(2)),
+                Box::new(Expression::Parameter(3)),
+            ))),
+        }
+    );
+    assert_eq!(
+        parse("SELECT COALESCE(?, 0) FROM users WHERE id = ?").unwrap(),
+        SqlAction::Select(Box::new(SqlQuery::Basic(BasicSqlQuery {
+            select: vec![item(Expression::Function {
+                name: "COALESCE".into(),
+                args: vec![Box::new(Expression::Parameter(1)), Box::new(int_lit(0))],
+            })],
+            distinct: false,
+            from: tbl("users"),
+            where_clause: Some(Predicate::Compare(
+                Comparison::Equals,
+                Box::new(col("id")),
+                Box::new(Expression::Parameter(2)),
+            )),
+            group_by: None,
+            order: None,
+        })))
+    );
+}
+
+#[test]
+fn test_parameter_syntax_limits() {
+    for sql in [
+        "SELECT id FROM ?",
+        "UPDATE users SET ? = 1",
+        "SELECT :name FROM users",
+        "SELECT $1 FROM users",
+        "SELECT id FROM users WHERE id =",
+        "SELECT ? ? FROM users",
+        "SELECT id FROM users WHERE id IN (?)",
+        "SELECT id FROM users WHERE name LIKE ?",
+        "CREATE TABLE users (id INT DEFAULT ?)",
+    ] {
+        assert!(parse(sql).is_err(), "{sql}");
+    }
+}

@@ -182,7 +182,12 @@ railroad-ebnf-beta
     %% done
     select = select_query | sub_select_query whitespace set_operation whitespace sub_select_query;
     
-    select_query = "select" whitespace ;
+    select_query = "select" whitespace select_value (whitespace "," whitespace select_value)* (whitespace "from" whitespace table_select where_clause? group_by? order_by?)?;
+    table_select = table_name whitespace identifier ("," table_name whitespace identifier)*;
+    group_by = whitespace "group" whitespace "by" whitespace group_by whitespace (table_column | literal) (whitespace "," whitespace table_column | literal)* (whitespace "having" whitespace where_clause)?;
+    order_by = "order" whitespace "by" whitespace ((table_column | literal) (whitespace ("asc" | "desc"))?)*;
+    where_clause = whitespace "where" whitespace predicate;
+
     select_value = (literal | table_col_expor | aggregate "(" whitespace table_col_expr whitespace ")") (whitespace "as" whitespace literal whitespace)?;
     table_column = column_name | (table_name "." column_name);
     table_col_expr = table_column | ("(" table_col_expr ")") | table_col_expr ("+" | "*" | "-" | "/") table_col_expr;

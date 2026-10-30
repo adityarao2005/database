@@ -136,16 +136,7 @@ classDiagram
         +rollback_transaction() async Transaction
 
         %% dml
-        +handle_select(query) async ResultSet
-        +handle_insert(table, tuples) async ResultSet
-        +handle_delete(table, predicate) async ResultSet
-        +handle_update(table, values, predicate) async ResultSet
-
-        %% ddl
-        +handle_create_table(table, elements) async ResultSet
-        +handle_drop_table(table) async ResultSet
-        +handle_create_view(table, materialized, query) async ResultSet
-        +handle_drop_view(table) async ResultSet
+        +execute(query) async ResultSet
     }
 ```
 

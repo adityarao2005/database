@@ -131,6 +131,13 @@ so its transaction context is explicit; a statement does not choose that context
 
 ## SQL String Parser
 
+The planned parser is the upstream [`sqlparser` crate](https://docs.rs/sqlparser/),
+also known as [sqlparser-rs](https://github.com/apache/datafusion-sqlparser-rs).
+The custom parser crate has been removed; upstream integration is planned. The local engine will adapt upstream
+syntax AST nodes into database-owned schema and execution representations and
+reject unsupported features during preparation. Storage will use those
+database-owned types rather than depending on a parser's syntax AST.
+
 `Connection.prepare_sql(sql)` delegates preparation to its backend/session. With an embedded
 local engine, parsing happens in the application process. With a remote engine,
 the client sends SQL to the server and the server's local engine parses it. The
@@ -158,8 +165,8 @@ Preparation accepts SQL containing positional `?` placeholders. Execution accept
 an ordered list of typed values. Each placeholder has its own one-based position,
 in source order across the whole statement, including subqueries. For example,
 `SELECT name FROM users WHERE id = ? AND active = ?` binds `[42, true]`.
-The parser represents these as `Expression::Parameter(1)` and
-`Expression::Parameter(2)`; it does not bind or interpolate values.
+The planned engine preparation adapter will assign these positions from upstream
+placeholder nodes; parsing does not bind or interpolate values.
 
 A local statement retains a backend-specific prepared handle. A remote statement
 retains a server-issued statement ID associated with its connection/session.
@@ -171,12 +178,11 @@ Client libraries may later offer `:name` or `$1` notation. They must normalize i
 to `?` before preparation and reorder or duplicate execution values to match each
 occurrence. This requires SQL-aware handling that preserves quoted text and comments.
 For example, two occurrences of `:id` become two `?` placeholders with the same
-value supplied twice. Only `?` is supported by the current parser.
+value supplied twice. Only `?` is part of the database's parameter contract;
+upstream support for other spellings does not expand that contract.
 
 Placeholders represent values, not identifiers, keywords, or SQL fragments.
-See the parser design for the currently supported expression positions.
-
-More details regarding the Lexer and Parser semantics, see [here](./sql_query_parser.md).
+See the parser design for the integration plan and parameter contract.
 
 ## Database Engines
 

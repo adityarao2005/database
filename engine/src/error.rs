@@ -1,4 +1,6 @@
 
+
+
 pub enum Error {
     ConnectionFailed,
     DatabaseError(String),

@@ -1,5 +1,6 @@
 use crate::{connection::Connection, engine::Engine, error::Error};
 
+pub mod completion;
 pub mod connection;
 pub mod engine;
 pub mod error;

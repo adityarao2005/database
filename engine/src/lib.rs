@@ -1,14 +1,22 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
+use crate::{connection::Connection, engine::Engine, error::Error};
+
+pub mod connection;
+pub mod engine;
+pub mod error;
+
+
+pub struct Client<E: Engine> {
+    engine: E,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
 
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
+impl<E: Engine> Client<E> {
+    pub fn new(engine: E) -> Self {
+        Self { engine }
+    }
+
+    pub async fn connect(&self) -> Result<Connection<E::Handle>, Error> {
+        let handle = self.engine.connect().await?;
+        Ok(Connection::new(handle))
     }
 }

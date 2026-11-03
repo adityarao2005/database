@@ -1,5 +1,17 @@
 # Design of the Database
 
+## Implementation status
+
+The `engine` crate now provides the generic `Client<E>`, `Engine`,
+`Connection<H>`, `ConnectionHandle`, `Executable`, `Transaction`, and `Completion`
+API. Local and remote engines, SQL preparation, storage, and backend execution
+remain unimplemented. The diagrams below describe the intended architecture;
+backend-specific classes are design targets.
+
+Current execution returns buffered `ResultSet` values and string errors. Streaming,
+column metadata, unified errors, and a fallible explicit connection-close API are
+future work. Generate the Rust API reference with `cargo doc --workspace --no-deps`.
+
 ## Interaction between User and Database
 
 The user can interact with the database as shown below:
@@ -32,14 +44,14 @@ classDiagram
     class LocalEngine
     class RemoteEngine
     class ConnectionHandle {
-        <<internal trait>>
+        <<backend trait>>
     }
     class LocalConnectionHandle
     class RemoteConnectionHandle
     class Connection {
         +execute(sql, parameters) async ExecutionResult
         +begin_transaction() async Transaction
-        +close() async
+        +drop()
     }
     class Transaction {
         +execute(sql, parameters) async ExecutionResult
@@ -112,8 +124,10 @@ in source order across the whole statement, including subqueries. For example,
 The planned engine preparation adapter will assign these positions from upstream
 placeholder nodes; parsing does not bind or interpolate values.
 
-The public entry point is `execute(&mut self, sql: &str, parameters: &[Value])`.
-It prepares SQL internally and binds values separately; it never interpolates
+The current public entry point is
+`execute(&mut self, query: &str, values: &[Values])`. `Values` is the current name
+of the scalar value enum (`Value` in the planned examples). Backend implementations
+are responsible for preparing SQL internally and binding values separately; it never interpolates
 parameters into SQL text. `Value` is an enum covering supported SQL values,
 including NULL, strings, integers, floats, and other supported scalar types.
 Parameter count and type compatibility are checked before execution.
@@ -137,11 +151,11 @@ See the parser design for the integration plan and parameter contract.
 ## Database Engines
 
 The `Engine` trait creates backend-specific connection handles. Operational
-methods belong to the internal connection-handle abstraction and its transaction
+methods belong to the public backend connection-handle abstraction and its transaction
 support, rather than taking session and transaction IDs on `Engine`.
 The public wrappers provide a consistent API over those handles.
 
-The following sketch illustrates the type relationship; it is not implemented:
+The following simplified sketch illustrates the implemented type relationship:
 
 ```rust,ignore
 trait Engine {
@@ -173,14 +187,61 @@ reference explicitly to helpers. Dropping an unfinished transaction must arrange
 rollback before session reuse. Ordinary Rust `Drop` cannot await, so cleanup must
 be managed by the backend; a session whose cleanup fails must not be reused.
 
-Connections can be explicitly closed with a consuming async `close(self)` method
-for fallible cleanup. Dropping a connection releases its resources and arranges
-any necessary backend cleanup. Closing or dropping a connection must never commit
-an unfinished explicit transaction.
+### Completion and cleanup
 
-### Execution results and column metadata
+`ConnectionHandle::commit_transaction` and `rollback_transaction` are synchronous
+trigger methods returning `Completion`. Calling them must start or enqueue work
+immediately. The completion wraps a `futures_channel::oneshot` receiver carrying
+`Result<(), String>`; `wait(self)` asynchronously observes that result without
+requiring Tokio. The channel does not execute or schedule the operation.
 
-Execution returns `Result<ExecutionResult<'_>, Error>`. Errors are represented by
+The transaction sets its internal `finished` flag after triggering the operation
+and before awaiting it. This flag means cleanup responsibility has transferred to
+the backend. Cancelling that wait must not cancel the operation or cause the guard
+to trigger rollback again. Dropping an unfinished guard triggers rollback and
+discards its completion receiver.
+
+Backend implementations must:
+
+- Continue triggered work when the completion receiver is dropped.
+- Serialize later session operations behind pending transaction completion.
+- Record failures independently of result delivery, invalidating a session when
+  its state cannot be recovered.
+- Handle cancellation during `begin_transaction`, when no guard has yet been
+  returned, without leaving an untracked active transaction.
+- Handle trigger/enqueue failure synchronously by leaving the session safe or
+  unusable; the current trigger signatures have no separate enqueue-error result.
+
+If the completion sender disappears, `wait` returns `"Completion channel closed"`.
+That indicates loss of confirmation, not a known commit or rollback outcome.
+
+`Connection::drop` currently calls the synchronous `ConnectionHandle::close(&mut
+self)` hook. This hook must release resources or arrange cleanup that survives
+handle destruction, without committing unfinished work. It should not panic or
+block waiting for asynchronous work. It returns no error or completion, so callers
+cannot currently await connection closure or observe cleanup failure. A consuming,
+fallible async `Connection::close(self)` is a possible future extension.
+
+These are backend contracts; the generic wrappers alone do not enforce database
+atomicity, operation ordering, or cleanup progress.
+
+### Current execution results
+
+`Executable::execute` currently returns `Result<ResultSet, String>`:
+
+- `Rows(Vec<Vec<Values>>)` contains fully buffered rows in column order.
+- `AffectedRows(u64)` reports a command's affected-row count.
+- `LastInsertId(u64)` reports a generated insert identifier.
+
+This representation has no column metadata or explicit DDL-success variant, and
+cannot report an affected-row count together with an insert ID. `Unknown` in
+`Values` is provisional and has no defined binding semantics. Connection opening
+uses the crate's `Error` enum; execution and completion currently use strings.
+The following section describes the intended evolution of this API.
+
+### Planned execution results and column metadata
+
+The planned API returns `Result<ExecutionResult<'_>, Error>`. Errors are represented by
 Rust's outer `Result`, rather than a successful enum variant. The planned result
 shape is:
 
@@ -235,9 +296,8 @@ atomicity and isolation; adding session handles alone does not provide those
 properties. Transactional DDL and catalog updates must participate in the same
 commit/rollback mechanism when supported.
 
-The current `engine/src/lib.rs` contains only the generated `add` function and its
-test. These engine/session interfaces and transaction semantics are design targets,
-not implemented functionality.
+The generic engine/session wrappers exist, but no local storage backend currently
+implements these interfaces. Atomicity and isolation still require storage support.
 
 ### Remote Storage
 

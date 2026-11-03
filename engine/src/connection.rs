@@ -1,4 +1,3 @@
-
 use async_trait::async_trait;
 
 use crate::completion::Completion;
@@ -32,6 +31,7 @@ pub trait ConnectionHandle: Executable {
     async fn begin_transaction(&mut self) -> Result<(), String>;
     fn commit_transaction(&mut self) -> Completion;
     fn rollback_transaction(&mut self) -> Completion;
+    fn close(&mut self) -> ();
 }
 
 pub struct Connection<H: ConnectionHandle> {
@@ -48,13 +48,18 @@ impl<H: ConnectionHandle> Connection<H> {
         Ok(Transaction::new(self))
     }
 
-
     fn commit_transaction(&mut self) -> Completion {
         self.handle.commit_transaction()
     }
 
     fn rollback_transaction(&mut self) -> Completion {
         self.handle.rollback_transaction()
+    }
+}
+
+impl<H: ConnectionHandle> Drop for Connection<H> {
+    fn drop(&mut self) {
+        self.handle.close();
     }
 }
 
@@ -78,30 +83,32 @@ impl<H: ConnectionHandle> Executable for Transaction<'_, H> {
 }
 
 impl<'conn, H: ConnectionHandle> Transaction<'conn, H> {
-    pub fn new(connection: &'conn mut Connection<H>) -> Self {
+    fn new(connection: &'conn mut Connection<H>) -> Self {
         Self {
             connection,
             finished: false,
         }
     }
 
-    pub async fn commit(&mut self) -> Result<(), String> {
-        let value = self.connection.commit_transaction().wait().await;
+    pub async fn commit(mut self) -> Result<(), String> {
+        let value = self.connection.commit_transaction();
         self.finished = true;
-        value
+        value.wait().await
     }
 
-    pub async fn rollback(&mut self) -> Result<(), String> {
-        let value = self.connection.rollback_transaction().wait().await;
+    pub async fn rollback(mut self) -> Result<(), String> {
+        let value = self.connection.rollback_transaction();
         self.finished = true;
-        value
+        value.wait().await
     }
 }
 
 impl<H: ConnectionHandle> Drop for Transaction<'_, H> {
     fn drop(&mut self) {
-        // If the transaction is dropped without explicitly committing or rolling back,
-        // we should roll it back to ensure data consistency.
-        self.connection.rollback_transaction();
+        if !self.finished {
+            // If the transaction is dropped without explicitly committing or rolling back,
+            // we should roll it back to ensure data consistency.
+            self.connection.rollback_transaction();
+        }
     }
 }

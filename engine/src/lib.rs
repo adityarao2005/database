@@ -12,7 +12,16 @@ pub mod helpers;
 
 /// Application-facing database handle owning a configured engine.
 ///
-/// Connections own their handles and do not borrow the client.
+/// Connections borrow the engine owned by this client and cannot outlive it.
+///
+/// ```compile_fail
+/// use engine::{Client, engine::Engine, connection::Executable};
+/// async fn cannot_drop_client<E: Engine>(client: Client<E>) {
+///     let mut connection = client.connect().await.unwrap();
+///     drop(client);
+///     let _ = connection.execute("SELECT 1", &[]).await;
+/// }
+/// ```
 pub struct Client<E: Engine> {
     engine: E,
 }
@@ -27,8 +36,7 @@ impl<E: Engine> Client<E> {
     ///
     /// # Errors
     /// Returns the error reported by [`Engine::connect`].
-    pub async fn connect(&self) -> Result<Connection<E::Handle>, ConnectionError> {
-        let handle = self.engine.connect().await?;
-        Ok(Connection::new(handle))
+    pub async fn connect(&self) -> Result<Connection<'_, E::Handle<'_>>, ConnectionError> {
+        self.engine.connect().await
     }
 }

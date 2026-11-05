@@ -404,6 +404,122 @@ mod tests {
         assert!(error.to_string().contains("socket closed"));
     }
 
+    #[test]
+    fn pending_row_wait_can_be_cancelled_without_losing_a_row() {
+        let (mut sender, mut rows) = RowSet::channel(vec![column("id")], 1);
+        {
+            let mut next = std::pin::pin!(rows.next());
+            assert!(
+                next.as_mut()
+                    .poll(&mut Context::from_waker(Waker::noop()))
+                    .is_pending()
+            );
+        }
+        sender.try_send(Ok(vec![Value::Int(8)])).unwrap();
+        let row = next_ready(&mut rows).unwrap().unwrap();
+        assert!(matches!(row.get(0), Some(Value::Int(8))));
+    }
+
+    #[test]
+    fn bounded_delivery_applies_backpressure_and_drop_closes_receiver() {
+        let (mut sender, rows) = RowSet::channel(vec![], 0);
+        // futures-channel reserves one slot for each sender, even at capacity zero.
+        sender.try_send(Ok(vec![])).unwrap();
+        assert!(sender.try_send(Ok(vec![])).unwrap_err().is_full());
+        drop(rows);
+        assert!(sender.try_send(Ok(vec![])).unwrap_err().is_disconnected());
+    }
+
+    #[test]
+    fn received_row_keeps_metadata_after_result_set_is_dropped() {
+        let (mut sender, mut rows) = RowSet::channel(vec![column("id")], 1);
+        sender.try_send(Ok(vec![Value::Null])).unwrap();
+        let row = next_ready(&mut rows).unwrap().unwrap();
+        drop(rows);
+        assert_eq!(row.columns()[0].name, "id");
+        assert!(matches!(row.get_by_name("id"), Ok(Value::Null)));
+    }
+
+    #[test]
+    fn terminal_error_discards_queued_rows() {
+        let (mut sender, mut rows) = RowSet::channel(vec![column("id")], 2);
+        sender
+            .try_send(Err(errors::ExecutionError::Backend("failed".into()).into()))
+            .unwrap();
+        sender.try_send(Ok(vec![Value::Int(1)])).unwrap();
+        assert!(matches!(
+            next_ready(&mut rows),
+            Some(Err(RowStreamError::Execution(_)))
+        ));
+        assert!(next_ready(&mut rows).is_none());
+        assert!(next_ready(&mut rows).is_none());
+    }
+
+    #[test]
+    fn all_value_kinds_can_be_delivered_in_column_order() {
+        let date = chrono::NaiveDate::from_ymd_opt(2026, 11, 5).unwrap();
+        let time = chrono::NaiveTime::from_hms_opt(12, 30, 0).unwrap();
+        let columns = vec![
+            Column {
+                name: "int".into(),
+                data_type: DataType::Int,
+            },
+            Column {
+                name: "float".into(),
+                data_type: DataType::Float,
+            },
+            Column {
+                name: "text".into(),
+                data_type: DataType::Varchar { max_length: 10 },
+            },
+            Column {
+                name: "bool".into(),
+                data_type: DataType::Boolean,
+            },
+            Column {
+                name: "null".into(),
+                data_type: DataType::Char { length: 1 },
+            },
+            Column {
+                name: "date".into(),
+                data_type: DataType::Date,
+            },
+            Column {
+                name: "time".into(),
+                data_type: DataType::Time,
+            },
+        ];
+        let (mut sender, mut rows) = RowSet::channel(columns, 1);
+        assert_eq!(rows.get_columns().count(), 7);
+        sender
+            .try_send(Ok(vec![
+                Value::Int(i64::MAX),
+                Value::Float(1.5),
+                Value::String("hello".into()),
+                Value::Boolean(true),
+                Value::Null,
+                Value::Date(date),
+                Value::Time(time),
+            ]))
+            .unwrap();
+        let row = next_ready(&mut rows).unwrap().unwrap();
+        assert!(matches!(row.get(0), Some(Value::Int(i64::MAX))));
+        assert!(matches!(row.get(1), Some(Value::Float(v)) if *v == 1.5));
+        assert!(matches!(row.get(2), Some(Value::String(v)) if v == "hello"));
+        assert!(matches!(row.get(3), Some(Value::Boolean(true))));
+        assert!(matches!(row.get(4), Some(Value::Null)));
+        assert!(matches!(row.get(5), Some(Value::Date(v)) if *v == date));
+        assert!(matches!(row.get(6), Some(Value::Time(v)) if *v == time));
+    }
+
+    #[test]
+    fn dropping_completion_does_not_require_sender_to_cancel_work() {
+        let (sender, receiver) = oneshot::channel();
+        drop(Completion::new(receiver));
+        // Backends can finish work and tolerate an observer that has gone away.
+        assert_eq!(sender.send(Ok(())), Err(Ok(())));
+    }
+
     fn column(name: &str) -> Column {
         Column {
             name: name.into(),

@@ -70,12 +70,21 @@ classDiagram
     Connection --> Transaction : lends mutable borrow
 ```
 
-`Connection<H: ConnectionHandle>` is a public struct wrapping a backend-specific
+`Connection<'engine, H: ConnectionHandle>` is a public struct wrapping a backend-specific
 session handle. `H` is the connection handle created by the engine, not the engine
 type. For example, `Client<LocalEngine>` opens a
 `Connection<LocalConnectionHandle>`, while `Client<RemoteEngine>` opens a
 `Connection<RemoteConnectionHandle>`. Rust infers these types at call sites.
 Dispatch is at compile time; boxed trait objects are not required.
+
+`Engine::connect` returns the connection wrapper directly. Its lifetime borrows
+`&self`, so connections cannot outlive the engine, including when its session
+handle owns all its state. `Client::connect` forwards this borrow through the
+engine it owns, preventing the client from being dropped first. The engine does
+not store a collection of connections or forcibly close them on shutdown.
+`Engine::Handle<'engine>` is a generic associated type: local and remote backend
+handles may borrow engine state, or own their session state. Backends construct a
+wrapper with `Connection::new(handle, self)`.
 
 A connection is one logical session. An embedded handle references shared database
 state and owns session state; a remote handle owns a network session.
@@ -159,30 +168,30 @@ The public wrappers provide a consistent API over those handles.
 The following simplified sketch illustrates the implemented type relationship:
 
 ```rust,ignore
+#[async_trait]
 trait Engine {
-    type Handle: ConnectionHandle;
+    type Handle<'engine>: ConnectionHandle where Self: 'engine;
 
-    async fn connect(&self) -> Result<Self::Handle, ConnectionError>;
+    async fn connect<'engine>(
+        &'engine self,
+    ) -> Result<Connection<'engine, Self::Handle<'engine>>, ConnectionError>;
 }
 
-struct Client<E: Engine> {
-    engine: E,
-}
-
-struct Connection<H: ConnectionHandle> {
+struct Connection<'engine, H: ConnectionHandle> {
     handle: H,
+    // Carries the engine borrow even if H owns all its state.
+    _engine: PhantomData<&'engine ()>,
 }
 
 impl<E: Engine> Client<E> {
-    async fn connect(&self) -> Result<Connection<E::Handle>, ConnectionError> {
-        let handle = self.engine.connect().await?;
-        Ok(Connection { handle })
+    async fn connect(&self) -> Result<Connection<'_, E::Handle<'_>>, ConnectionError> {
+        self.engine.connect().await
     }
 }
 ```
 
-`Transaction<'conn, H>` holds an exclusive connection borrow and backend-specific
-transaction state. `commit(self)` and `rollback(self)` consume the transaction;
+`Transaction<'conn, H>` exclusively borrows the connection's handle; the backend
+handle owns transaction state. The returned guard keeps the connection borrowed. `commit(self)` and `rollback(self)` consume the transaction;
 after completion the connection can be used again. Pass a mutable transaction
 reference explicitly to helpers. Dropping an unfinished transaction must arrange
 rollback before session reuse. Ordinary Rust `Drop` cannot await, so cleanup must
@@ -321,3 +330,22 @@ implements these interfaces. Atomicity and isolation still require storage suppo
 ### Remote Storage
 
 Remote storage means there is an instance of the database running a specific protocol on the network. On the other end of the network would be local storage or a custom engine which stores this another way. This requires an instance of the "standalone" sql db to be running at an address. More info about this [here](./remote_sql_db.md).
+
+## API template tests
+
+`engine/tests/api.rs` contains a mock engine whose session handle borrows engine
+state. It demonstrates client and direct-engine connection creation, independent
+sessions, parameterized execution, row consumption, DDL/DML results, explicit and
+automatic rollback, consuming commit, connection closure, and operation-specific
+errors. Deferred completions exercise cancellation and lost confirmation without
+requiring an async runtime. The mock is not a SQL parser or a storage/isolation test.
+
+Helper unit tests cover value delivery, ordered metadata, duplicate and missing
+column names, row-width errors, terminal stream failures, empty results, bounded
+channel behavior, cancelled row waits, and completion delivery. Compile-fail
+Rustdoc examples check engine/client lifetimes, exclusive transaction borrowing,
+and transaction consumption. Run all of them with `cargo test --workspace`.
+
+Row sets currently own their channels without borrowing their executing session;
+these tests do not claim compile-time exclusion of operations while rows are live.
+Backend serialization and cleanup contracts remain necessary.

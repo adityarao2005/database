@@ -10,8 +10,14 @@ execution semantics.
 `Client<E: Engine>` is the application-facing interface. The engine is configured
 at construction and creates backend-specific connection handles through its
 argument-free `connect()` method. The client wraps each handle in a public
-`Connection<H>`. For a local engine, `H` is `LocalConnectionHandle`, not
-`LocalEngine`. Backend selection uses compile-time dispatch.
+`Connection<'engine, H>`. For a local engine, `H` is `LocalConnectionHandle`, not
+`LocalEngine`. Backend selection uses compile-time dispatch. Connections borrow their creating
+engine and cannot outlive the client that owns it. `Engine::connect` returns the
+connection wrapper directly; a backend implements `Handle<'engine>` and constructs
+the wrapper with `Connection::new(handle, self)`.
+
+See `engine/tests/api.rs` for a runnable mock backend using the current API. The
+examples below still illustrate planned streaming and explicit-close refinements.
 
 ```rust,ignore
 let client = Client::new(LocalEngine::open("./db").await?);

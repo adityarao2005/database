@@ -42,13 +42,9 @@ classDiagram
         <<trait>>
         +connect() async ConnectionHandle
     }
-    class LocalEngine
-    class RemoteEngine
     class ConnectionHandle {
         <<backend trait>>
     }
-    class LocalConnectionHandle
-    class RemoteConnectionHandle
     class Connection {
         +execute(sql, parameters) async ExecutionResult
         +begin_transaction() async Transaction
@@ -59,10 +55,6 @@ classDiagram
         +commit() async
         +rollback() async
     }
-    Engine <|.. LocalEngine
-    Engine <|.. RemoteEngine
-    ConnectionHandle <|.. LocalConnectionHandle
-    ConnectionHandle <|.. RemoteConnectionHandle
     Client *-- Engine
     Client --> Connection : opens
     Engine --> ConnectionHandle : creates
@@ -312,20 +304,7 @@ engine crate remains a scaffold.
 
 ### Local Storage
 
-`LocalEngine::connect` creates a `LocalConnectionHandle`. Each handle references
-the shared database state (for example through `Arc`) and owns independent session
-and transaction state.
-
-The local engine owns shared database state: catalog, tables, indexes, and the
-page/storage manager. It must not hold a single global current transaction.
-Each local connection handle identifies its own active transaction, and execution passes
-that context down to storage. Commit/rollback need actual storage support for
-atomicity and isolation; adding session handles alone does not provide those
-properties. Transactional DDL and catalog updates must participate in the same
-commit/rollback mechanism when supported.
-
-The generic engine/session wrappers exist, but no local storage backend currently
-implements these interfaces. Atomicity and isolation still require storage support.
+Local storage means that the storage of the database data is bound to the current process/program. The type of storage can be arbritary but we can represent the rest of the database logic through a `LocalEngine` which accepts an instance of a `LocalStorage`. For more details of the design of the local storage see [here](./local_sql_db.md).
 
 ### Remote Storage
 

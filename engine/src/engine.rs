@@ -2,7 +2,7 @@
 
 use async_trait::async_trait;
 
-use crate::{connection::ConnectionHandle};
+use crate::{connection::ConnectionHandle, helpers::errors::ConnectionError};
 
 /// A configured backend that opens database sessions.
 ///
@@ -17,5 +17,5 @@ pub trait Engine {
     ///
     /// # Errors
     /// Returns an error if the session cannot be established.
-    async fn connect(&self) -> Result<Self::Handle, String>;
+    async fn connect(&self) -> Result<Self::Handle, ConnectionError>;
 }

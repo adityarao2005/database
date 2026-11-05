@@ -8,8 +8,9 @@ API. Local and remote engines, SQL preparation, storage, and backend execution
 remain unimplemented. The diagrams below describe the intended architecture;
 backend-specific classes are design targets.
 
-Current execution returns buffered `ResultSet` values and string errors. Streaming,
-column metadata, unified errors, and a fallible explicit connection-close API are
+Current execution returns `ResultSet` values with channel-backed rows and column
+metadata. Operation-specific errors live in `helpers::errors`. Borrowing row streams
+from their executing session and a fallible explicit connection-close API remain
 future work. Generate the Rust API reference with `cargo doc --workspace --no-deps`.
 
 ## Interaction between User and Database
@@ -161,7 +162,7 @@ The following simplified sketch illustrates the implemented type relationship:
 trait Engine {
     type Handle: ConnectionHandle;
 
-    async fn connect(&self) -> Result<Self::Handle, Error>;
+    async fn connect(&self) -> Result<Self::Handle, ConnectionError>;
 }
 
 struct Client<E: Engine> {
@@ -173,7 +174,7 @@ struct Connection<H: ConnectionHandle> {
 }
 
 impl<E: Engine> Client<E> {
-    async fn connect(&self) -> Result<Connection<E::Handle>, Error> {
+    async fn connect(&self) -> Result<Connection<E::Handle>, ConnectionError> {
         let handle = self.engine.connect().await?;
         Ok(Connection { handle })
     }
@@ -192,7 +193,7 @@ be managed by the backend; a session whose cleanup fails must not be reused.
 `ConnectionHandle::commit_transaction` and `rollback_transaction` are synchronous
 trigger methods returning `Completion`. Calling them must start or enqueue work
 immediately. The completion wraps a `futures_channel::oneshot` receiver carrying
-`Result<(), String>`; `wait(self)` asynchronously observes that result without
+`Result<(), TransactionError>`; `wait(self)` asynchronously observes that result without
 requiring Tokio. The channel does not execute or schedule the operation.
 
 The transaction sets its internal `finished` flag after triggering the operation
@@ -212,7 +213,7 @@ Backend implementations must:
 - Handle trigger/enqueue failure synchronously by leaving the session safe or
   unusable; the current trigger signatures have no separate enqueue-error result.
 
-If the completion sender disappears, `wait` returns `"Completion channel closed"`.
+If the completion sender disappears, `wait` returns `TransactionError::CompletionLost`.
 That indicates loss of confirmation, not a known commit or rollback outcome.
 
 `Connection::drop` currently calls the synchronous `ConnectionHandle::close(&mut
@@ -227,17 +228,35 @@ atomicity, operation ordering, or cleanup progress.
 
 ### Current execution results
 
-`Executable::execute` currently returns `Result<ResultSet, String>`:
+`Executable::execute` returns `Result<ResultSet, ExecutionError>`:
 
-- `Rows(Vec<Vec<Values>>)` contains fully buffered rows in column order.
-- `AffectedRows(u64)` reports a command's affected-row count.
-- `LastInsertId(u64)` reports a generated insert identifier.
+- `Rows(RowSet)` exposes column metadata and channel-backed row delivery.
+- `DMLSuccess { affected_rows: Option<u64> }` reports successful data modification.
+- `DDLSuccess` reports successful schema modification.
 
-This representation has no column metadata or explicit DDL-success variant, and
-cannot report an affected-row count together with an insert ID. `Unknown` in
-`Values` is provisional and has no defined binding semantics. Connection opening
-uses the crate's `Error` enum; execution and completion currently use strings.
-The following section describes the intended evolution of this API.
+### Errors by operation
+
+The inline `helpers::errors` module defines independent public error enums, each
+implementing `Display` and `std::error::Error`:
+
+- `ConnectionError`: authentication, configuration, availability, or backend errors
+  when opening a session.
+- `ExecutionError`: invalid SQL, unsupported features, parameter errors, constraint
+  violations, connection loss, or other execution failures.
+- `TransactionError`: invalid transaction state, conflicts, connection loss, lost
+  completion confirmation, or other transaction failures. Used by transaction
+  startup and commit/rollback completions.
+- `RowStreamError`: an execution failure during streaming, preserving its source,
+  or a row-width mismatch with expected and actual counts.
+- `RowAccessError`: a missing or ambiguous column name. Positional lookup continues
+  to return `Option<&Value>` for an out-of-range index.
+
+Variants are non-exhaustive so new failure categories can be added. Backend
+messages supply context; callers should match variants rather than parse text.
+Connection loss can occur after session establishment, so execution and transaction
+errors include it too. `TransactionError::CompletionLost` means confirmation was
+lost, not that commit or rollback definitely failed. Dropped completions still
+require backends to record failures and protect subsequent session use.
 
 ### Planned execution results and column metadata
 

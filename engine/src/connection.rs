@@ -2,7 +2,10 @@
 
 use async_trait::async_trait;
 
-use crate::helpers::{Completion, ResultSet, Value};
+use crate::helpers::{
+    Completion, ResultSet, Value,
+    errors::{ExecutionError, TransactionError},
+};
 
 /// Executes SQL using the session's current transaction context.
 #[async_trait]
@@ -14,7 +17,8 @@ pub trait Executable: Send {
     ///
     /// # Errors
     /// Returns a backend error for invalid SQL, binding failures, or execution failures.
-    async fn execute(&mut self, query: &str, values: &[Value]) -> Result<ResultSet, String>;
+    async fn execute(&mut self, query: &str, values: &[Value])
+    -> Result<ResultSet, ExecutionError>;
 }
 
 /// Backend implementation of one logical database session.
@@ -28,7 +32,7 @@ pub trait Executable: Send {
 #[async_trait]
 pub trait ConnectionHandle: Executable {
     /// Starts a transaction, returning a backend error if startup fails.
-    async fn begin_transaction(&mut self) -> Result<(), String>;
+    async fn begin_transaction(&mut self) -> Result<(), TransactionError>;
     /// Triggers commit and returns an observer of its eventual result.
     fn commit_transaction(&mut self) -> Completion;
     /// Triggers rollback and returns an observer of its eventual result.
@@ -58,7 +62,7 @@ impl<H: ConnectionHandle> Connection<H> {
     ///
     /// # Errors
     /// Returns the backend error if transaction startup fails.
-    pub async fn begin_transaction(&mut self) -> Result<Transaction<'_, H>, String> {
+    pub async fn begin_transaction(&mut self) -> Result<Transaction<'_, H>, TransactionError> {
         self.handle.begin_transaction().await?;
         Ok(Transaction::new(self))
     }
@@ -80,7 +84,11 @@ impl<H: ConnectionHandle> Drop for Connection<H> {
 
 #[async_trait]
 impl<H: ConnectionHandle> Executable for Connection<H> {
-    async fn execute(&mut self, query: &str, values: &[Value]) -> Result<ResultSet, String> {
+    async fn execute(
+        &mut self,
+        query: &str,
+        values: &[Value],
+    ) -> Result<ResultSet, ExecutionError> {
         self.handle.execute(query, values).await
     }
 }
@@ -97,7 +105,11 @@ pub struct Transaction<'conn, H: ConnectionHandle> {
 
 #[async_trait]
 impl<H: ConnectionHandle> Executable for Transaction<'_, H> {
-    async fn execute(&mut self, query: &str, values: &[Value]) -> Result<ResultSet, String> {
+    async fn execute(
+        &mut self,
+        query: &str,
+        values: &[Value],
+    ) -> Result<ResultSet, ExecutionError> {
         self.connection.execute(query, values).await
     }
 }
@@ -117,7 +129,7 @@ impl<'conn, H: ConnectionHandle> Transaction<'conn, H> {
     ///
     /// # Errors
     /// Returns a backend error or an error if the completion sender disappears.
-    pub async fn commit(mut self) -> Result<(), String> {
+    pub async fn commit(mut self) -> Result<(), TransactionError> {
         let value = self.connection.commit_transaction();
         self.finished = true;
         value.wait().await
@@ -129,7 +141,7 @@ impl<'conn, H: ConnectionHandle> Transaction<'conn, H> {
     ///
     /// # Errors
     /// Returns a backend error or an error if the completion sender disappears.
-    pub async fn rollback(mut self) -> Result<(), String> {
+    pub async fn rollback(mut self) -> Result<(), TransactionError> {
         let value = self.connection.rollback_transaction();
         self.finished = true;
         value.wait().await

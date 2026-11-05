@@ -4,11 +4,11 @@
 //! Local storage, remote transport, parsing, and execution implementations are
 //! not provided yet. Transaction cleanup is a contract for backend implementors.
 
-use crate::{connection::Connection, engine::Engine};
+use crate::{connection::Connection, engine::Engine, helpers::errors::ConnectionError};
 
-pub mod helpers;
 pub mod connection;
 pub mod engine;
+pub mod helpers;
 
 /// Application-facing database handle owning a configured engine.
 ///
@@ -27,7 +27,7 @@ impl<E: Engine> Client<E> {
     ///
     /// # Errors
     /// Returns the error reported by [`Engine::connect`].
-    pub async fn connect(&self) -> Result<Connection<E::Handle>, String> {
+    pub async fn connect(&self) -> Result<Connection<E::Handle>, ConnectionError> {
         let handle = self.engine.connect().await?;
         Ok(Connection::new(handle))
     }

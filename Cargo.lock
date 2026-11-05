@@ -80,6 +80,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "file-storage"
+version = "0.1.0"
+
+[[package]]
 name = "find-msvc-tools"
 version = "0.1.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -143,6 +147,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "in-memory-storage"
+version = "0.1.0"
+
+[[package]]
 name = "js-sys"
 version = "0.3.107"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -158,6 +166,10 @@ name = "libc"
 version = "0.2.191"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "65cd87c9a6d60536580b316ad985726104730a5151c99845f2490428ef91240a"
+
+[[package]]
+name = "local-engine"
+version = "0.1.0"
 
 [[package]]
 name = "log"
@@ -197,6 +209,10 @@ checksum = "1fbf4db142a473a8d80c26bbf18454ed458bf8d26c8219c331daecfdbd079001"
 dependencies = [
  "proc-macro2",
 ]
+
+[[package]]
+name = "remote-engine"
+version = "0.1.0"
 
 [[package]]
 name = "rustversion"

@@ -24,26 +24,45 @@ classDiagram
 
     class TableDefinition {
         +String name
-        +[Column] columns
-        +[Index] indexes
     }
 
-    Catalog *--> TableDefinition
+    TableDefinition --> "1" type TableId
+    TableDefinition --> Column: columns
+    IndexDefinition --> "1" type IndexId
+    IndexDefinition --> Column: searchKey
+
+    class IndexDefinition {
+        +String name
+    }
+
+    TableDefinition --> "0.." IndexDefinition
+
+    Catalog *--> "0.." TableDefinition
     Catalog --> StorageManager
-
-    class QueryExecutor {
-    }
 
     QueryExecutor --> StorageManager
 
     class StorageManager {
         <<trait>>
+
+        async begin_transaction() Transaction
     }
 
+    StorageManager *--> Transaction
+
+    class Transaction {
+        async scan(TableId) RowSet or Error
+        async lookup(TableId, IndexId, Value) RowSet or Error
+        async delete(TableId, RowId): bool
+        async update(TableId, RowId, Value): bool
+        async commit()
+        async rollback()
+    }
+
+    QueryManager <--* LocalEngine
     Catalog <--* LocalEngine
     QueryExecutor <--* LocalEngine
     StorageManager <--* LocalEngine
-    StorageManager <|-- TransactionalStorageManager
 ```
 
 `LocalEngine::connect` creates a `LocalConnectionHandle`. Each handle references

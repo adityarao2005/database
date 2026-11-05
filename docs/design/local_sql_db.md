@@ -1,5 +1,51 @@
 # Local Engine SQL DB
 
+The following class diagram describes the domain model for the local SQL engine.
+
+```mermaid
+classDiagram
+    class LocalEngine {
+        async connect() Connection or Error
+    }
+
+    class LocalConnectionHandle {
+        async begin_transaction()
+        async commit_transaction()
+        async rollback_transaction()
+        async execute_query(string, values)
+    }
+
+    ConnectionHandle <|-- LocalConnectionHandle
+    LocalEngine *--> "0.." LocalConnectionHandle
+    Engine <|-- LocalEngine
+
+    class Catalog {
+    }
+
+    class TableDefinition {
+        +String name
+        +[Column] columns
+        +[Index] indexes
+    }
+
+    Catalog *--> TableDefinition
+    Catalog --> StorageManager
+
+    class QueryExecutor {
+    }
+
+    QueryExecutor --> StorageManager
+
+    class StorageManager {
+        <<trait>>
+    }
+
+    Catalog <--* LocalEngine
+    QueryExecutor <--* LocalEngine
+    StorageManager <--* LocalEngine
+    StorageManager <|-- TransactionalStorageManager
+```
+
 `LocalEngine::connect` creates a `LocalConnectionHandle`. Each handle references
 the shared database state (for example through `Arc`) and owns independent session
 and transaction state.

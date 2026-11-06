@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use async_trait::async_trait;
 use engine::{connection::{Connection, ConnectionHandle, Executable}, engine::Engine, helpers::{Completion, ResultSet, Value, errors::{ConnectionError, ExecutionError, TransactionError}}};
 
@@ -12,7 +14,7 @@ impl Drop for LocalEngine {
 #[async_trait]
 impl Engine for LocalEngine {
     #[doc = " A backend session handle which may itself borrow engine state."]
-    type Handle<'engine> = LocalConnectionHandle
+    type Handle<'engine> = LocalConnectionHandle<'engine>
     where
         Self: 'engine;
 
@@ -24,7 +26,6 @@ impl Engine for LocalEngine {
     #[doc = " # Errors"]
     #[doc = " Returns an error if the session cannot be established."]
     #[allow(
-        elided_named_lifetimes,
         clippy::type_complexity,
         clippy::type_repetition_in_bounds
     )]
@@ -32,14 +33,24 @@ impl Engine for LocalEngine {
         &'engine self,
     ) -> Result<Connection<'engine, Self::Handle<'engine>>, ConnectionError>
     {
-        todo!()
+        let handle = LocalConnectionHandle::new(self);
+        Ok(Connection::new(handle, self))
     }
 }
 
-pub struct LocalConnectionHandle {}
+pub struct LocalConnectionHandle<'engine> {
+    engine: &'engine LocalEngine,
+}
+
+impl<'engine> LocalConnectionHandle<'engine> {
+    /// Creates a new `LocalConnectionHandle` with the given engine.
+    fn new(engine: &'engine LocalEngine) -> Self {
+        Self { engine }
+    }
+}
 
 #[async_trait]
-impl ConnectionHandle for LocalConnectionHandle {
+impl<'engine> ConnectionHandle for LocalConnectionHandle<'engine> {
     async fn begin_transaction(&mut self) -> Result<(), TransactionError> {
         todo!("Implement begin_transaction for LocalConnectionHandle")
     }
@@ -58,7 +69,7 @@ impl ConnectionHandle for LocalConnectionHandle {
 }
 
 #[async_trait]
-impl Executable for LocalConnectionHandle {
+impl<'engine> Executable for LocalConnectionHandle<'engine> {
     async fn execute(
         &mut self,
         query: &str,

@@ -170,6 +170,10 @@ checksum = "65cd87c9a6d60536580b316ad985726104730a5151c99845f2490428ef91240a"
 [[package]]
 name = "local-engine"
 version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "engine",
+]
 
 [[package]]
 name = "log"

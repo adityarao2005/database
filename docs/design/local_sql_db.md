@@ -77,7 +77,7 @@ classDiagram
         async scan(TableId) RowSet or Error
         async lookup(IndexId, IndexRange) RowSet or Error
         async insert(TableId, Tuple) RowId or Error
-        async delete(TableId, RowId) bool or Error
+        async delete(TableId, RowId) Result
         async update(TableId, RowId, Tuple) Result
         async commit()
         async rollback()
@@ -131,7 +131,7 @@ stateDiagram-v2
 
         input_sql --> sql_handling
         sql_handling --> new_event : success
-        sql_handling --> rollback_required : DDL failure
+        sql_handling --> rollback_required : statement failure
         rollback_required --> rollback_changes : explicit rollback or cleanup
     }
 
@@ -187,6 +187,45 @@ concurrent metadata changes and protect validation reads against conflicting
 writes, or report a transaction conflict. Validation followed by an unprotected
 metadata write is insufficient. The provider chooses locking, versioning, and
 physical allocation strategies while preserving these guarantees.
+
+### Current Rust interface
+
+The first draft lives in [`local-engine/src/storage.rs`](../../local-engine/src/storage.rs).
+The diagrams describe the intended domain contracts; the following details describe
+the current Rust API and its remaining gaps.
+
+- `StorageManager: Sized + Send + Sync` provides associated `TableId`, `ColumnId`,
+  `ConstraintId`, `IndexId`, `ViewId`, and `RowId` types, plus a concrete
+  `Tx: Transaction<Self> + Send`. `begin_transaction()` returns
+  `Result<Self::Tx, TransactionError>`. It currently has no manager receiver;
+  binding transactions to a particular manager instance remains to be addressed.
+- A connection can retain `Option<SM::Tx>` across statements, borrow the transaction
+  for operations, and take it out for completion. Internal `commit(self)` and
+  `rollback(self)` consume the transaction. They are distinct from the public
+  engine's `Completion` API; backend-owned completion and cleanup guarantees still
+  apply when a caller cancels a wait.
+- `Row<SM>` contains shared ordered column definitions, a `Vec<Value>`, and the
+  provider's `RowId`. `RowStream<SM>` is a bounded channel receiver yielding
+  `Result<Row<SM>, RowStreamError>`. Producers validate rows and end delivery after
+  an error; the receiver does not enforce these rules. Receiver ownership alone
+  does not define cursor lifetime, transaction borrowing, or cancellation behavior.
+- `insert(table_id, values)` returns `Result<SM::RowId, TransactionError>`;
+  `update(table_id, row_id, values)` and `delete(table_id, row_id)` return
+  `Result<(), TransactionError>`. Inserts and updates receive complete ordered
+  rows after the engine evaluates assignments and defaults. A missing target row
+  is an error for update or delete. A SQL mutation matching zero rows succeeds
+  without issuing per-row mutations.
+- Metadata reads currently return `Option` or a dependency vector, while creation
+  and view replacement return bare IDs. These signatures still need a way to
+  report provider failures. `get_column` includes the owning table ID.
+- Definition structs are preliminary: tables currently embed index definitions,
+  columns omit defaults, constraints have IDs but no definition type, and views
+  store SQL text. The richer definitions below remain intended catalog contracts.
+  Creation inputs, explicit alterations, index ranges, and fallible view
+  replacement preserving identity still need their final Rust types.
+
+`Catalog`, `QueryExecutor`, and `QueryManager` remain future implementation work.
+This interface establishes their storage boundary without specifying their APIs.
 
 ### Definitions and lookup
 
@@ -268,7 +307,7 @@ Internal `RowId` values are separate from SQL primary keys.
 `Tuple` means a complete ordered row matching the transaction-visible column
 definition. `update` replaces the complete row while preserving its `RowId`;
 the engine computes assignments and defaults before calling it. A missing target
-row is an error for `update`; `delete` returns `false` when no visible row exists.
+row is an error for both `update` and `delete`.
 Storage scans and index lookups must expose row IDs alongside tuples for mutations.
 Their internal row cursor need not use the application-facing `RowSet` type;
 `RowSet` in the diagram is shorthand for a fallible sequence of stored rows.
@@ -328,17 +367,23 @@ Catalog coordinates dependency checks and storage applies the changes under the
 same transaction's concurrency protection. Physical reclamation may be deferred
 until no reader needs the removed objects.
 
-### Failed DDL and rollback
+### Statement failures and rollback
 
-Any error while preparing or executing an identified DDL statement marks its
-active transaction as requiring rollback. This includes name-resolution,
-validation, unsupported-operation, storage, and dependency errors. A malformed
-statement that cannot be classified does not acquire DDL-specific behavior;
-general statement-error policy is separate.
+Any error while preparing or executing a SQL statement marks its active
+transaction as requiring rollback. This includes syntax, parameter, name-resolution,
+type-validation, unsupported-operation, constraint, storage, and dependency errors,
+as well as errors delivered after row streaming begins. The policy applies to
+DDL, reads, and mutations alike; malformed statements need not be classified first.
+A successful query or mutation producing zero rows is not an error.
 
-After a DDL failure, subsequent SQL execution and `commit` are rejected with a
+In an explicit transaction, the original statement error is returned and the
+transaction remains open but aborted until rollback or cleanup completes. Returning
+an error does not itself complete rollback. Earlier successful statements and any
+partial work from the failed statement remain uncommitted and cannot be published.
+
+After a statement failure, subsequent SQL execution and `commit` are rejected with a
 transaction-aborted error. A rejected commit must not publish changes or make the
-connection reusable as though rollback had completed. Partial DDL work remains
+connection reusable as though rollback had completed. Partial statement work remains
 uncommitted and is discarded together with earlier work in the transaction when
 rollback completes. Statement savepoints and recovery within that transaction
 are not initially supported.
@@ -350,7 +395,7 @@ transaction. Dropping or closing the connection likewise arranges cleanup.
 Session reuse waits for cleanup; failed cleanup makes the session unusable.
 
 In autocommit mode, the engine rolls back the failed statement's implicit
-transaction before allowing another operation. The original DDL error is returned;
+transaction before allowing another operation. The original statement error is returned;
 cleanup failure must also be recorded and prevent unsafe session reuse. The
 storage provider owns completion and cancellation handling, following the
 connection cleanup contract in [the engine design](./README.md#completion-and-cleanup).
@@ -367,9 +412,6 @@ open. These must not be silently selected by individual storage providers:
 - **Isolation and constraint protection:** choose the minimum isolation contract
   for engine validation, including protection of absent-key checks and foreign-key
   checks. Atomic writes alone do not prevent concurrent constraint violations.
-- **Non-DDL failures:** decide whether preparation, read, and mutation failures
-  abort an explicit transaction. DDL's rollback-required policy is already fixed;
-  continuing after a partially applied mutation would require statement rollback.
 - **Identifier rules:** specify quoted and unquoted name comparison and the
   namespace for index names. Table/view name sharing alone does not settle these.
 - **Index comparison:** specify key ordering, NULL ordering and uniqueness,

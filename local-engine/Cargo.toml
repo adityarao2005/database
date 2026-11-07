@@ -6,3 +6,4 @@ edition = "2024"
 [dependencies]
 async-trait = "0.1.92"
 engine = { path = "../engine" }
+futures-channel = "0.3.34"

@@ -1,7 +1,6 @@
-use std::{future::poll_fn, pin::Pin, slice::Iter, sync::Arc};
+use std::{slice::Iter, sync::Arc};
 
 use futures_channel::{mpsc, oneshot};
-use futures_core::Stream;
 
 /// Errors grouped by the operation that can produce them.
 ///
@@ -260,18 +259,7 @@ impl Row {
     }
 }
 
-/// Column metadata and a bounded channel of fallible rows.
-///
-/// Dropping this object closes the receiver. Backends must handle send failure
-/// and arrange execution cleanup. This type currently does not borrow a connection;
-/// backend operation ordering and transaction cleanup remain backend obligations.
-/// Producers must send execution errors explicitly before closing the channel:
-/// channel closure alone is treated as end of rows, not proof of execution success.
-pub struct RowSet {
-    columns: Arc<[Column]>,
-    receiver: mpsc::Receiver<Result<Vec<Value>, RowStreamError>>,
-    finished: bool,
-}
+pub type RowSet = mpsc::Receiver<Result<Vec<Value>, RowStreamError>>;
 
 /// SQL types exposed through column metadata.
 pub enum DataType {
@@ -289,72 +277,6 @@ pub enum DataType {
     Date,
     /// A time of day.
     Time,
-}
-
-impl RowSet {
-    /// Creates row delivery and its producer endpoint with a bounded channel.
-    ///
-    /// Metadata is available immediately, including for empty results. Producers
-    /// must send one value per column, in column order. They must use a finite
-    /// buffer and avoid creating unbounded numbers of sender clones.
-    pub fn channel(
-        columns: Vec<Column>,
-        capacity: usize,
-    ) -> (mpsc::Sender<Result<Vec<Value>, RowStreamError>>, Self) {
-        let (sender, receiver) = mpsc::channel(capacity);
-        (
-            sender,
-            Self {
-                columns: columns.into(),
-                receiver,
-                finished: false,
-            },
-        )
-    }
-
-    /// Iterates over output-column metadata.
-    pub fn get_columns(&self) -> Iter<'_, Column> {
-        self.columns.iter()
-    }
-
-    /// Returns ordered metadata even before rows arrive.
-    pub fn columns(&self) -> &[Column] {
-        &self.columns
-    }
-
-    /// Waits for the next row; returns `None` after channel closure or an error.
-    ///
-    /// Backend errors and mismatched row widths are yielded once, after which
-    /// delivery ends. Dropping a pending call does not consume a future row.
-    pub async fn next(&mut self) -> Option<Result<Row, RowStreamError>> {
-        if self.finished {
-            return None;
-        }
-        let item = poll_fn(|cx| Pin::new(&mut self.receiver).poll_next(cx)).await;
-        match item {
-            Some(Ok(values)) if values.len() == self.columns.len() => Some(Ok(Row {
-                columns: Arc::clone(&self.columns),
-                values,
-            })),
-            Some(Ok(values)) => {
-                self.finished = true;
-                self.receiver.close();
-                Some(Err(RowStreamError::InvalidRowWidth {
-                    expected: self.columns.len(),
-                    actual: values.len(),
-                }))
-            }
-            Some(Err(error)) => {
-                self.finished = true;
-                self.receiver.close();
-                Some(Err(error))
-            }
-            None => {
-                self.finished = true;
-                None
-            }
-        }
-    }
 }
 
 #[cfg(test)]

@@ -1,5 +1,4 @@
 pub mod storage;
-pub mod objects;
 
 use async_trait::async_trait;
 use engine::{connection::{Connection, ConnectionHandle, Executable}, engine::Engine, helpers::{Completion, ResultSet, Value, errors::{ConnectionError, ExecutionError, TransactionError}}};

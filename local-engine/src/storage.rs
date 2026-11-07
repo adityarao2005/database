@@ -8,14 +8,16 @@ use engine::helpers::{
 use futures_channel::mpsc;
 
 #[async_trait]
-pub trait StorageManager {
+pub trait StorageManager: Sized + Send + Sync {
     type TableId;
     type IndexId;
     type RowId;
     type ViewId;
     type ColumnId;
+    type ConstraintId;
+    type Tx: Transaction<Self> + Send;
 
-    async fn begin_transaction() -> Result<Box<dyn Transaction<Self>>, TransactionError>;
+    async fn begin_transaction() -> Result<Self::Tx, TransactionError>;
 }
 
 pub enum RelationId<SM: StorageManager> {
@@ -26,7 +28,7 @@ pub enum RelationId<SM: StorageManager> {
 pub enum CatalogObjectId<SM: StorageManager> {
     Table(SM::TableId),
     Column(SM::TableId, SM::ColumnId),
-    Constraint(SM::TableId, SM::ColumnId),
+    Constraint(SM::TableId, SM::ConstraintId),
     Index(SM::IndexId),
     View(SM::ViewId),
 }
@@ -78,7 +80,11 @@ pub trait Transaction<SM: StorageManager> {
     async fn get_index(&self, id: SM::IndexId) -> Option<IndexDefinition<SM>>
     where
         Self: Sized;
-    async fn get_column(&self, id: SM::ColumnId) -> Option<ColumnDefinition<SM>>
+    async fn get_column(
+        &self,
+        table_id: SM::TableId,
+        id: SM::ColumnId,
+    ) -> Option<ColumnDefinition<SM>>
     where
         Self: Sized;
     async fn get_view(&self, id: SM::ViewId) -> Option<ViewDefinition<SM>>
@@ -109,7 +115,9 @@ pub trait Transaction<SM: StorageManager> {
     async fn drop_index(&self, id: SM::IndexId) -> Result<(), TransactionError>
     where
         Self: Sized;
-
+    async fn replace_view(&self, definition: ViewDefinition<SM>) -> SM::ViewId
+    where
+        Self: Sized;
     async fn create_view(&self, definition: ViewDefinition<SM>) -> SM::ViewId
     where
         Self: Sized;
@@ -132,7 +140,15 @@ pub trait Transaction<SM: StorageManager> {
     ) -> Result<(), TransactionError>
     where
         Self: Sized;
-    
+
+    async fn insert(
+        &self,
+        table_id: SM::TableId,
+        values: &[Value],
+    ) -> Result<SM::RowId, TransactionError>
+    where
+        Self: Sized;
+
     async fn update(
         &self,
         table_id: SM::TableId,

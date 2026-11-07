@@ -12,11 +12,12 @@ use engine::{
     connection::{Connection, ConnectionHandle, Executable},
     engine::Engine,
     helpers::{
-        Column, Completion, DataType, ResultSet, RowSet, Value,
+        Completion, ResultSet, Value,
         errors::{ConnectionError, ExecutionError, TransactionError},
     },
 };
-use futures_channel::oneshot;
+use futures_channel::{mpsc, oneshot};
+use futures_core::Stream;
 
 // A tiny test executor: wakeups unpark the test thread, without a runtime dependency.
 struct ThreadWake(thread::Thread);
@@ -120,13 +121,7 @@ impl Executable for MockHandle<'_> {
             }
             "SELECT" if params.is_empty() => {
                 let values = self.pending.as_ref().unwrap_or(&state.values);
-                let (mut sender, rows) = RowSet::channel(
-                    vec![Column {
-                        name: "id".into(),
-                        data_type: DataType::Int,
-                    }],
-                    values.len(),
-                );
+                let (mut sender, rows) = mpsc::channel(values.len());
                 for value in values {
                     sender.try_send(Ok(vec![Value::Int(*value)])).unwrap();
                 }
@@ -220,9 +215,11 @@ async fn ids(connection: &mut Connection<'_, MockHandle<'_>>) -> Vec<i64> {
         panic!("expected rows")
     };
     let mut values = vec![];
-    while let Some(row) = rows.next().await {
+    while let Some(row) =
+        std::future::poll_fn(|cx| std::pin::Pin::new(&mut rows).poll_next(cx)).await
+    {
         let row = row.unwrap();
-        let Value::Int(id) = row.get_by_name("id").unwrap() else {
+        let Value::Int(id) = row.first().unwrap() else {
             panic!("expected integer")
         };
         values.push(*id);

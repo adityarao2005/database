@@ -199,11 +199,16 @@ the current Rust API and its remaining gaps.
   `Tx: Transaction<Self> + Send`. `begin_transaction()` returns
   `Result<Self::Tx, TransactionError>`. It currently has no manager receiver;
   binding transactions to a particular manager instance remains to be addressed.
-- A connection can retain `Option<SM::Tx>` across statements, borrow the transaction
-  for operations, and take it out for completion. Internal `commit(self)` and
-  `rollback(self)` consume the transaction. They are distinct from the public
-  engine's `Completion` API; backend-owned completion and cleanup guarantees still
-  apply when a caller cancels a wait.
+- The connection scaffold retains its storage transaction in an explicit state:
+  idle, active, completing, or unusable. While completing, an internal oneshot
+  receiver remains in the connection across cancelled waits. It is separate from
+  the public `Completion` observer; completion work must eventually notify both.
+  The scaffold conservatively makes the connection unusable after a completion
+  error, failed startup, or cancelled startup. Provider guarantees may later allow
+  reuse after known clean failures. Tracking aborted explicit transactions and
+  implementing commit, rollback, close, and execution remain future work.
+  Internal `commit(self)` and `rollback(self)` consume the transaction; backend-owned
+  completion and cleanup guarantees still apply when a caller cancels a wait.
 - `Row<SM>` contains shared ordered column definitions, a `Vec<Value>`, and the
   provider's `RowId`. `RowStream<SM>` is a bounded channel receiver yielding
   `Result<Row<SM>, RowStreamError>`. Producers validate rows and end delivery after

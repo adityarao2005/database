@@ -17,7 +17,7 @@ pub trait StorageManager: Sized + Send + Sync {
     type ConstraintId;
     type Tx: Transaction<Self> + Send;
 
-    async fn begin_transaction() -> Result<Self::Tx, TransactionError>;
+    async fn begin_transaction(&self) -> Result<Self::Tx, TransactionError>;
 }
 
 pub enum RelationId<SM: StorageManager> {

@@ -1,20 +1,32 @@
 pub mod storage;
+pub mod catalog;
+pub mod query;
 
 use async_trait::async_trait;
 use engine::{connection::{Connection, ConnectionHandle, Executable}, engine::Engine, helpers::{Completion, ResultSet, Value, errors::{ConnectionError, ExecutionError, TransactionError}}};
 
-pub struct LocalEngine {}
+use crate::storage::StorageManager;
 
-impl Drop for LocalEngine {
+pub struct LocalEngine<SM: StorageManager> {
+    storage_manager: SM,
+}
+
+impl<SM: StorageManager> LocalEngine<SM> {
+    pub fn new(storage_manager: SM) -> Self {
+        Self { storage_manager }
+    }
+}
+
+impl<SM: StorageManager> Drop for LocalEngine<SM> {
     fn drop(&mut self) {
         todo!()
     }
 }
 
 #[async_trait]
-impl Engine for LocalEngine {
+impl<SM: StorageManager> Engine for LocalEngine<SM> {
     #[doc = " A backend session handle which may itself borrow engine state."]
-    type Handle<'engine> = LocalConnectionHandle<'engine>
+    type Handle<'engine> = LocalConnectionHandle<'engine, SM>
     where
         Self: 'engine;
 
@@ -38,19 +50,21 @@ impl Engine for LocalEngine {
     }
 }
 
-pub struct LocalConnectionHandle<'engine> {
-    engine: &'engine LocalEngine,
+pub struct LocalConnectionHandle<'engine, SM: StorageManager> {
+    engine: &'engine LocalEngine<SM>,
+    current_transaction: Option<SM::Tx>,
 }
 
-impl<'engine> LocalConnectionHandle<'engine> {
+
+impl<'engine, SM: StorageManager> LocalConnectionHandle<'engine, SM> {
     /// Creates a new `LocalConnectionHandle` with the given engine.
-    fn new(engine: &'engine LocalEngine) -> Self {
-        Self { engine }
+    fn new(engine: &'engine LocalEngine<SM>) -> Self {
+        Self { engine, current_transaction: None }
     }
 }
 
 #[async_trait]
-impl<'engine> ConnectionHandle for LocalConnectionHandle<'engine> {
+impl<'engine, SM: StorageManager> ConnectionHandle for LocalConnectionHandle<'engine, SM> {
     async fn begin_transaction(&mut self) -> Result<(), TransactionError> {
         todo!("Implement begin_transaction for LocalConnectionHandle")
     }
@@ -69,7 +83,7 @@ impl<'engine> ConnectionHandle for LocalConnectionHandle<'engine> {
 }
 
 #[async_trait]
-impl<'engine> Executable for LocalConnectionHandle<'engine> {
+impl<'engine, SM: StorageManager> Executable for LocalConnectionHandle<'engine, SM> {
     async fn execute(
         &mut self,
         query: &str,

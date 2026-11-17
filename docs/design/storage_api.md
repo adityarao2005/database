@@ -63,14 +63,137 @@ objects return `NotFound`. Row operations and streamed items use `StorageError`;
 the engine translates these at its public execution boundary. Transaction startup
 and completion retain the public `TransactionError` type.
 
-Schema errors must not leave partial changes from the failed operation. Roll back
-after any storage error unless the provider explicitly guarantees continued use.
-An unfinished transaction's drop must release or roll back resources. Cancellation
-of begin/commit must complete cleanup independently or leave no live resources.
-The local handle conservatively becomes unusable when commit is cancelled or
-completion fails. These are provider contracts, not implemented backend behavior.
+## Validation and enforcement boundaries
 
-Check expressions, referential actions other than NO ACTION, deferrability, and
-supporting-index ownership remain deferred. The broader local-engine design
-includes future behavior beyond this API. No storage backend or SQL execution
-is implemented by these interface changes.
+The engine resolves names, checks types, prepares expressions, and performs early
+semantic checks for useful diagnostics. The storage provider enforces supported
+invariants for all writes, including concurrent transactions and commit. An
+engine-side check alone cannot protect against another transaction changing the
+data before commit. Providers may repeat checks and choose locking, conflict
+detection, staging, or other mechanisms; they must preserve the same observable
+contract. Commit-time validation may detect conflicts missed earlier. Whether a
+constraint can deliberately defer a violation until commit is a separate SQL
+semantics decision; deferrable constraints are not supported by the current types.
+
+## Operation errors and transaction state
+
+The intended default is operation atomicity: success applies the complete
+operation to the transaction's pending state; a recoverable error leaves that
+logical state unchanged, including rows, indexes, and metadata. Earlier successful
+operations remain pending and the transaction may continue or commit. Validation
+before mutation is insufficient by itself: local writes can fail midway, for
+example when disk space is exhausted. Providers must stage changes, undo partial
+work, or use an equivalent mechanism to satisfy this contract.
+
+Error causes and transaction effects are distinct. A generic backend error does
+not establish whether the transaction is still active or was automatically rolled
+back. The intended outcomes are:
+
+| Outcome | Required behavior |
+| --- | --- |
+| Recoverable operation error | Keep the transaction active and unchanged by the failed operation. |
+| Transaction aborted, cleanup pending | Retain its handle; reject execution, begin, and commit; allow rollback or drop. |
+| Provider already rolled back | Reject further work through the existing guard; cleanup must be idempotent before releasing that guard. |
+| Cleanup failed or state is uncertain | Prevent connection reuse. |
+| Successful explicit rollback | Release the transaction and permit connection reuse. |
+| Commit/rollback error or cancelled started commit | Conservatively prevent local connection reuse; do not infer commit outcome from an error alone. |
+
+Do not switch to autocommit while a public transaction guard still represents an
+aborted transaction. An aborted transaction is distinct from an unusable
+connection: successful rollback can restore connection usability. Providers must
+prevent committing a transaction they have marked aborted, even if the engine
+has not yet observed the failure.
+
+These are intended guarantees, not a completed implementation. `StorageError`
+and `ExecutionError` currently describe causes but do not provide a complete
+transaction-effect protocol. That protocol must be defined before execution is
+implemented; callers must not guess recovery from message text. `Aborted(T)` is
+present in the local state enum, but execution and transitions into it are not
+implemented. Rollback accepts both active and aborted transactions, preserves idle
+and unusable states on invalid calls, and returns to idle only after cleanup succeeds.
+
+### Statements composed of several operations
+
+Operation atomicity does not make an entire SQL statement atomic. For example,
+creating a table and then adding constraints involves multiple operations. If a
+later step fails, earlier steps remain pending. Until statement-level undo or
+savepoints exist, the engine must abort and roll back that transaction rather
+than allow a partial statement to be committed. This applies even when the
+individual error would otherwise be recoverable. Reads used for preparation
+must also share appropriate concurrency protection with the resulting writes.
+
+### Cleanup and disk exhaustion
+
+An unfinished storage transaction's drop must release resources and discard its
+pending changes, or arrange provider-owned cleanup that prevents unsafe reuse.
+Dropping a Rust value is not automatically a durable rollback; each provider
+implements that guarantee. Begin/commit cancellation must finish cleanup
+independently or leave no live transaction/resources behind. Dropping a commit
+future stops polling it; it does not establish whether commit persisted.
+
+A file provider must preserve a recoverable state before writes begin. Append-only
+or copy-on-write storage can abandon unpublished data; overwrite-based storage
+needs prior undo information and a recovery strategy. These are alternatives,
+not a selected file format. Logical rollback must not depend on immediately
+deleting temporary files: disk exhaustion, metadata errors, or a read-only
+filesystem can prevent physical cleanup. Reclamation may be deferred. If safe
+continuation or rollback cannot be established, the provider must report failure
+and prevent reuse rather than claim successful cleanup.
+
+`LocalEngine` relies on normal Rust field destruction to drop its storage manager.
+It needs no empty custom `Drop` implementation. Provider-specific destruction
+belongs to the provider. Rust `Drop` cannot report cleanup errors; any future
+fallible shutdown API is a separate decision.
+
+## Keys and user-visible indexes
+
+Key constraints and user-visible indexes are independent objects. There is no
+supporting-index ownership relation in this contract. Dropping an ordinary index
+must not remove a key guarantee or make its enforcement ineffective. Dropping a
+constraint does not implicitly drop an independently created index.
+
+Providers may use private indexes or other structures to enforce primary, unique,
+and foreign keys; they may also choose physical organization around a primary
+key. The API does not require an exposed primary-key index or any particular
+algorithm. Internal enforcement structures are not user-droppable schema indexes.
+
+## Defaults, checks, and views
+
+Defaults and check constraints are deferred until SQL preparation introduces
+engine-owned expression types with defined binding, typing, and SQL NULL
+semantics. A default produces a value; a check evaluates a row expression.
+Neither is represented by the current `ColumnSpec` or `ConstraintKind`, and
+unsupported definitions must be rejected explicitly when SQL preparation exists.
+
+The planned boundary is SQL text to sqlparser syntax AST to engine-owned prepared
+expressions and queries. Upstream AST types stay inside preparation and never
+appear in storage or protocol contracts. An engine-owned expression type does
+not inherently require sqlparser, but developing both together can guide its
+shape. Persisted expressions need a stable representation; transient physical
+plans are not a persistence format. If a provider is to re-evaluate checks, it
+must receive an agreed executable representation or evaluation mechanism; that
+boundary is still to be designed.
+
+`CreateView` and `ViewDefinition` currently carry SQL text and output columns.
+This is a definition-storage placeholder, not an executable query representation
+or a claim that storage can bind or validate SQL. The engine will prepare view
+queries. A prepared view representation, dependency tracking across renames,
+and persisted binding semantics remain future work. Providers may reject view
+operations with `UnsupportedOperation` until supported.
+
+Referential actions other than NO ACTION, deferrability, defaults, checks, and
+statement-level recovery remain outside the current interface. No storage backend
+or SQL execution is implemented by these contracts.
+
+## Verification and follow-up
+
+Existing tests cover transaction completion, cancellation, error propagation,
+invalid state calls, and lookup shape/capability validation using mocks. They do
+not verify provider durability, isolation, operation rollback, aborted-state
+cleanup, or SQL statement atomicity. Provider tests must exercise partial-write
+failures, disk exhaustion where applicable, continued use after recoverable
+errors, aborted cleanup, and constraint preservation with concurrent writes.
+
+The storage-contract issue can be reviewed independently of provider
+implementation. Local-engine integration and transaction/recovery issues retain
+both shared state-management work and provider-specific implementation/testing.

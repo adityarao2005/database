@@ -143,3 +143,11 @@ storage errors independently of public query execution errors. Providers validat
 `rows::IndexSearch` against `schema::IndexAccess` and return explicit unsupported
 errors rather than silently changing a lookup into a scan. These interfaces do
 not yet have a working storage provider.
+
+Recoverable operation errors must leave a provider transaction unchanged and
+usable. Fatal errors require aborted-transaction cleanup or connection invalidation;
+the error-to-state protocol is still pending implementation. SQL statements spanning
+multiple operations need transaction rollback on failure until statement recovery
+exists. See the [transaction and expression decisions](../design/storage_api.md)
+for intended guarantees and known implementation gaps. Defaults/check expressions
+are deferred, and view SQL fields currently describe stored definitions only.

@@ -8,6 +8,8 @@ use self::{
 };
 
 /// Failures from storage operations, independent of SQL parsing and execution.
+/// These causes do not yet encode whether the transaction remains usable.
+/// See `docs/design/storage_api.md` for the intended recovery contract.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum StorageError {
@@ -170,7 +172,8 @@ pub mod schema {
     }
 
     /// SQL text is persisted as text; upstream parser AST never crosses this boundary.
-    /// View execution and binding are engine responsibilities.
+    /// View execution and binding are engine responsibilities. This is a
+    /// definition-storage placeholder until engine-owned query types exist.
     pub struct CreateView {
         pub name: String,
         pub columns: Vec<ColumnSpec>,
@@ -460,8 +463,10 @@ pub mod rows {
 /// Dropping an unfinished transaction must release/roll back its resources.
 /// Cancellation of begin/commit must either finish cleanup independently or leave
 /// no live transaction/resources behind. Completion errors make the connection
-/// unusable; they do not establish whether a commit persisted. A failed operation
-/// must not be committed unless the provider explicitly guarantees continued use.
+/// unusable; they do not establish whether a commit persisted. Recoverable operation
+/// errors leave the prior logical transaction state unchanged and usable. Fatal
+/// errors forbid further work except cleanup. The error-to-state protocol is pending;
+/// see `docs/design/storage_api.md`. Multi-operation statement recovery is separate.
 #[async_trait]
 pub trait Transaction<SM: StorageManager>:
     CatalogRead<SM> + SchemaWrite<SM> + RowRead<SM> + RowWrite<SM>

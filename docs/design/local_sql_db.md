@@ -1,5 +1,10 @@
 # Local Engine SQL DB
 
+The [current storage API decisions](storage_api.md) take precedence over this
+broader design for creation inputs, supported alterations, error recovery,
+constraint/index independence, and deferred expressions/views. Diagrams and
+unimplemented features below remain architectural targets.
+
 The following class diagram describes the domain model for the local SQL engine.
 
 ```mermaid
@@ -280,8 +285,8 @@ a table or view is valid. Neither type identifies a data row.
   or foreign key. Keys use ordered column IDs. Foreign keys identify the target
   table and key constraint, with explicit update and delete policies.
 - `IndexDefinition` contains its ID, name, table ID, ordered key columns,
-  uniqueness, and an optional owning constraint ID. It has one authoritative
-  definition; tables reference it by ID.
+  uniqueness, and supported access capabilities. Key constraints and user-visible
+  indexes are independent; there is no owning constraint ID.
 - `ViewDefinition` contains its ID, name, output columns, a database-owned logical
   query definition, and dependencies on other objects. Original SQL may be kept
   for display. Physical execution plans and upstream parser AST nodes are not
@@ -320,8 +325,8 @@ Their internal row cursor need not use the application-facing `RowSet` type;
 ### Creating and altering tables
 
 `create_table` creates both the logical definition and the provider's table
-representation. Constraints and their required supporting indexes are included in
-the same transactional operation. An empty table does not require a physical
+representation. Constraints and ordinary indexes are added through separate
+operations in the same transaction; see the current storage API for failure handling. An empty table does not require a physical
 allocation if the provider can represent it lazily.
 
 `alter_table(TableId, TableAlteration)` describes an explicit supported change,
@@ -333,8 +338,8 @@ rather than replacing arbitrary metadata. Initial alteration variants are:
 | Rename column | Update its name while preserving the column ID. |
 | Add column | Define values for existing rows and validate resulting constraints. |
 | Drop column | Reject dependent objects under the initial restricted-drop policy. |
-| Add constraint | Validate existing data and create any required backing index. |
-| Drop constraint | Check dependencies and remove exclusively owned backing indexes. |
+| Add constraint | Validate existing data and install provider-owned enforcement. |
+| Drop constraint | Check dependencies and remove the constraint enforcement. |
 
 The engine coordinates semantic validation and expression evaluation through the
 active transaction. The provider applies the corresponding metadata, row-layout,
@@ -352,10 +357,10 @@ their row changes. Commit publishes a complete, consistent index; rollback
 discards its creation. The provider coordinates index construction with concurrent
 writes and may initially block conflicting writes during the build.
 
-Primary-key and unique constraints own supporting unique indexes. Ordinary indexes
-can exist independently. Directly dropping a constraint-owned index is rejected;
-the owning constraint must be removed instead. `drop_index` removes both its
-definition and its transactional storage representation.
+Primary, unique, and foreign-key guarantees are independent of user-visible
+indexes. Providers may use private enforcement structures, but the API has no
+supporting-index ownership relation. Dropping an ordinary index must preserve
+constraints. `drop_index` removes its definition and transactional representation.
 
 An ordinary view stores a logical query definition without allocating row storage.
 `create_view` validates its query and dependencies. `replace_view` preserves the

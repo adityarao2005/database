@@ -24,12 +24,6 @@ impl<SM: StorageManager> LocalEngine<SM> {
     }
 }
 
-impl<SM: StorageManager> Drop for LocalEngine<SM> {
-    fn drop(&mut self) {
-        todo!()
-    }
-}
-
 #[async_trait]
 impl<SM: StorageManager> Engine for LocalEngine<SM> {
     #[doc = " A backend session handle which may itself borrow engine state."]
@@ -57,6 +51,7 @@ impl<SM: StorageManager> Engine for LocalEngine<SM> {
 enum TransactionState<T> {
     Idle,
     Active(T),
+    Aborted(T),
     Unusable,
 }
 
@@ -90,6 +85,9 @@ impl<'engine, SM: StorageManager> ConnectionHandle for LocalConnectionHandle<'en
             TransactionState::Unusable => Err(TransactionError::InvalidState(String::from(
                 "Transaction is unusable",
             ))),
+            TransactionState::Aborted(_) => Err(TransactionError::InvalidState(String::from(
+                "Transaction has been aborted and must be rolled back",
+            ))),
         }
     }
 
@@ -114,22 +112,25 @@ impl<'engine, SM: StorageManager> ConnectionHandle for LocalConnectionHandle<'en
     }
 
     fn rollback_transaction(&mut self) -> Result<(), TransactionError> {
-        if !matches!(self.current_transaction, TransactionState::Active(_)) {
-            return Err(TransactionError::InvalidState(String::from(
-                "Not in a transaction",
-            )));
+        if !matches!(
+            self.current_transaction,
+            TransactionState::Active(_) | TransactionState::Aborted(_)
+        ) {
+            return Err(TransactionError::InvalidState(
+                "Not in a transaction".into(),
+            ));
         }
 
-        if let TransactionState::Active(tx) =
-            std::mem::replace(&mut self.current_transaction, TransactionState::Unusable)
-        {
-            tx.rollback()?;
-            self.current_transaction = TransactionState::Idle;
-            Ok(())
-        } else {
-            Err(TransactionError::InvalidState(String::from(
+        let state = std::mem::replace(&mut self.current_transaction, TransactionState::Unusable);
+        match state {
+            TransactionState::Active(tx) | TransactionState::Aborted(tx) => {
+                tx.rollback()?;
+                self.current_transaction = TransactionState::Idle;
+                Ok(())
+            },
+            _ => Err(TransactionError::InvalidState(String::from(
                 "Not in a transaction",
-            )))
+            ))),
         }
     }
 }

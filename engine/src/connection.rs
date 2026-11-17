@@ -41,12 +41,6 @@ pub trait ConnectionHandle: Executable {
     async fn commit_transaction(&mut self) -> Result<(), TransactionError>;
     /// Triggers rollback and returns an observer of its eventual result. Must be synchronous.
     fn rollback_transaction(&mut self) -> Result<(), TransactionError>;
-    /// Releases or schedules cleanup of the session without committing active work.
-    ///
-    /// Called from `Drop`; implementations should neither block on asynchronous
-    /// work nor panic. Cleanup must survive destruction of the handle. Errors
-    /// cannot be returned through this method.
-    fn close(&mut self) -> ();
 }
 
 /// An owned session wrapping a backend-specific handle.
@@ -76,12 +70,6 @@ impl<'engine, H: ConnectionHandle> Connection<'engine, H> {
     pub async fn begin_transaction(&mut self) -> Result<Transaction<'_, H>, TransactionError> {
         self.handle.begin_transaction().await?;
         Ok(Transaction::new(&mut self.handle))
-    }
-}
-
-impl<H: ConnectionHandle> Drop for Connection<'_, H> {
-    fn drop(&mut self) {
-        self.handle.close();
     }
 }
 

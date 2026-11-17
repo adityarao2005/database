@@ -159,5 +159,5 @@ pub trait Transaction<SM: StorageManager> {
         Self: Sized;
 
     async fn commit(self) -> Result<(), TransactionError>;
-    async fn rollback(self) -> Result<(), TransactionError>;
+    fn rollback(self) -> Result<(), TransactionError>;
 }

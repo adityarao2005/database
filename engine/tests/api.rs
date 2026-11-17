@@ -12,7 +12,7 @@ use engine::{
     connection::{Connection, ConnectionHandle, Executable},
     engine::Engine,
     helpers::{
-        Completion, ResultSet, Value,
+        ResultSet, Value,
         errors::{ConnectionError, ExecutionError, TransactionError},
     },
 };
@@ -133,8 +133,7 @@ impl Executable for MockHandle<'_> {
     }
 }
 impl MockHandle<'_> {
-    fn finish(&mut self, commit: bool) -> Completion {
-        let (sender, receiver) = oneshot::channel();
+    fn finish(&mut self, commit: bool) -> Result<(), TransactionError> {
         let mut state = self.engine.state.lock().unwrap();
         state
             .events
@@ -161,13 +160,8 @@ impl MockHandle<'_> {
                 }
             },
         };
-        // Work completes independently of its observer. Only delivery is deferred.
-        if state.defer_completion && result.is_ok() {
-            state.completions.push(sender);
-        } else {
-            let _ = sender.send(result);
-        }
-        Completion::new(receiver)
+
+        return result;
     }
 }
 #[async_trait]
@@ -187,17 +181,11 @@ impl ConnectionHandle for MockHandle<'_> {
         self.pending = Some(state.values.clone());
         Ok(())
     }
-    fn commit_transaction(&mut self) -> Completion {
+    async fn commit_transaction(&mut self) -> Result<(), TransactionError> {
         self.finish(true)
     }
-    fn rollback_transaction(&mut self) -> Completion {
+    fn rollback_transaction(&mut self) -> Result<(), TransactionError> {
         self.finish(false)
-    }
-    fn close(&mut self) {
-        if self.pending.is_some() {
-            drop(self.finish(false));
-        }
-        self.engine.state.lock().unwrap().events.push("close");
     }
 }
 fn count(engine: &MockEngine, event: &str) -> usize {

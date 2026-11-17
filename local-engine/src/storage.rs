@@ -198,6 +198,7 @@ pub mod schema {
         where
             Self: Sized;
 
+        /// Creates an index on a table.
         async fn create_index(&self, definition: IndexDefinition<SM>) -> SM::IndexId
         where
             Self: Sized;
@@ -225,7 +226,7 @@ pub mod rows {
         errors::{RowStreamError, TransactionError},
     };
     use futures_channel::mpsc;
-    use std::sync::Arc;
+    use std::{ops::Bound, sync::Arc};
 
     pub struct Row<SM: StorageManager> {
         pub columns: Arc<[ColumnDefinition<SM>]>,
@@ -235,13 +236,29 @@ pub mod rows {
 
     pub type RowStream<SM: StorageManager> = mpsc::Receiver<Result<Row<SM>, RowStreamError>>;
 
+    /// A search query for an index.
+    pub enum IndexSearch {
+        Exact {
+            key: Vec<Value>,
+        },
+        PrefixRange {
+            prefix: Vec<Value>,
+            lower: Bound<Value>,
+            upper: Bound<Value>,
+        },
+    }
+
     #[async_trait]
     pub trait RowRead<SM: StorageManager> {
         async fn scan(&self, id: SM::TableId) -> Result<RowStream<SM>, RowStreamError>
         where
             Self: Sized;
-        // TODO: look into for revision, ensure we've got the lookup range defined
-        async fn lookup(&self, id: SM::IndexId) -> Result<RowStream<SM>, RowStreamError>
+        /// Look up rows in an index based on a search query.
+        async fn lookup(
+            &self,
+            id: SM::IndexId,
+            search: IndexSearch,
+        ) -> Result<RowStream<SM>, RowStreamError>
         where
             Self: Sized;
     }

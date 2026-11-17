@@ -7,7 +7,7 @@ use async_trait::async_trait;
 use crate::engine::Engine;
 
 use crate::helpers::{
-    Completion, ResultSet, Value,
+    ResultSet, Value,
     errors::{ExecutionError, TransactionError},
 };
 
@@ -38,9 +38,9 @@ pub trait ConnectionHandle: Executable {
     /// Starts a transaction, returning a backend error if startup fails.
     async fn begin_transaction(&mut self) -> Result<(), TransactionError>;
     /// Triggers commit and returns an observer of its eventual result.
-    fn commit_transaction(&mut self) -> Completion;
-    /// Triggers rollback and returns an observer of its eventual result.
-    fn rollback_transaction(&mut self) -> Completion;
+    async fn commit_transaction(&mut self) -> Result<(), TransactionError>;
+    /// Triggers rollback and returns an observer of its eventual result. Must be synchronous.
+    fn rollback_transaction(&mut self) -> Result<(), TransactionError>;
     /// Releases or schedules cleanup of the session without committing active work.
     ///
     /// Called from `Drop`; implementations should neither block on asynchronous
@@ -154,9 +154,9 @@ impl<'conn, H: ConnectionHandle> Transaction<'conn, H> {
     /// # Errors
     /// Returns a backend error or an error if the completion sender disappears.
     pub async fn commit(mut self) -> Result<(), TransactionError> {
-        let value = self.handle.commit_transaction();
+        let value = self.handle.commit_transaction().await;
         self.finished = true;
-        value.wait().await
+        return value;
     }
 
     /// Triggers rollback, consumes the guard, and waits for completion.
@@ -168,7 +168,7 @@ impl<'conn, H: ConnectionHandle> Transaction<'conn, H> {
     pub async fn rollback(mut self) -> Result<(), TransactionError> {
         let value = self.handle.rollback_transaction();
         self.finished = true;
-        value.wait().await
+        return value;
     }
 }
 
@@ -177,7 +177,7 @@ impl<H: ConnectionHandle> Drop for Transaction<'_, H> {
         if !self.finished {
             // If the transaction is dropped without explicitly committing or rolling back,
             // we should roll it back to ensure data consistency.
-            self.handle.rollback_transaction();
+            let _ = self.handle.rollback_transaction();
         }
     }
 }

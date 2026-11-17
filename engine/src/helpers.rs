@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use futures_channel::{mpsc, oneshot};
+use futures_channel::{mpsc};
 
 /// Errors grouped by the operation that can produce them.
 ///
@@ -149,34 +149,8 @@ pub mod errors {
     }
 }
 
-use errors::{RowAccessError, RowStreamError, TransactionError};
+use errors::{RowAccessError, RowStreamError};
 
-/// Receives the result of an operation already triggered by a backend.
-///
-/// This object does not schedule work. Dropping it discards the result receiver;
-/// the backend must continue the operation and handle failures independently.
-pub struct Completion {
-    receiver: oneshot::Receiver<Result<(), TransactionError>>,
-}
-
-impl Completion {
-    /// Wraps the receiver for a backend-owned operation.
-    pub fn new(receiver: oneshot::Receiver<Result<(), TransactionError>>) -> Self {
-        Self { receiver }
-    }
-
-    /// Waits for the operation result.
-    ///
-    /// # Errors
-    /// Returns the backend error, or [`TransactionError::CompletionLost`] if the sender
-    /// is dropped without delivering a result. Sender loss does not establish
-    /// whether the database operation succeeded or failed.
-    pub async fn wait(self) -> Result<(), TransactionError> {
-        self.receiver
-            .await
-            .unwrap_or(Err(TransactionError::CompletionLost))
-    }
-}
 
 /// A scalar SQL parameter or a value in a buffered result row.
 #[derive(Debug)]
@@ -286,35 +260,13 @@ pub enum DataType {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+
+use super::*;
     use futures_core::Stream;
     use std::{
         future::{Future, poll_fn},
         task::{Context, Poll, Waker},
     };
-
-    #[test]
-    fn completion_distinguishes_backend_failure_from_lost_confirmation() {
-        for result in [
-            Ok(()),
-            Err(TransactionError::Conflict("concurrent write".into())),
-        ] {
-            let (sender, receiver) = oneshot::channel();
-            sender.send(result.clone()).unwrap();
-            let mut wait = std::pin::pin!(Completion::new(receiver).wait());
-            assert_eq!(
-                wait.as_mut().poll(&mut Context::from_waker(Waker::noop())),
-                Poll::Ready(result)
-            );
-        }
-        let (sender, receiver) = oneshot::channel();
-        drop(sender);
-        let mut wait = std::pin::pin!(Completion::new(receiver).wait());
-        assert_eq!(
-            wait.as_mut().poll(&mut Context::from_waker(Waker::noop())),
-            Poll::Ready(Err(TransactionError::CompletionLost))
-        );
-    }
 
     #[test]
     fn stream_errors_preserve_the_execution_cause() {
@@ -402,14 +354,6 @@ mod tests {
         assert!(matches!(row.get(4), Some(Value::Null)));
         assert!(matches!(row.get(5), Some(Value::Date(v)) if *v == date));
         assert!(matches!(row.get(6), Some(Value::Time(v)) if *v == time));
-    }
-
-    #[test]
-    fn dropping_completion_does_not_require_sender_to_cancel_work() {
-        let (sender, receiver) = oneshot::channel();
-        drop(Completion::new(receiver));
-        // Backends can finish work and tolerate an observer that has gone away.
-        assert_eq!(sender.send(Ok(())), Err(Ok(())));
     }
 
     fn column(name: &str) -> Column {

@@ -120,16 +120,33 @@ impl<'engine, SM: StorageManager> ConnectionHandle for LocalConnectionHandle<'en
         Ok(())
     }
 
-    fn commit_transaction(&mut self) -> Completion {
+    async fn commit_transaction(&mut self) -> Result<(), TransactionError> {
+        let tx = match std::mem::replace(&mut self.current_transaction, TransactionState::Idle) {
+            TransactionState::Active(tx) => tx,
+            _ => panic!("No active transaction to commit"),
+        };
+
         todo!("Implement commit_transaction for LocalConnectionHandle")
     }
 
-    fn rollback_transaction(&mut self) -> Completion {
+    fn rollback_transaction(&mut self) -> Result<(), TransactionError> {
         todo!("Implement rollback_transaction for LocalConnectionHandle")
     }
 
     fn close(&mut self) -> () {
-        todo!("Implement close for LocalConnectionHandle")
+        match &self.current_transaction {
+            TransactionState::Idle => {
+                // No action needed
+            },
+            TransactionState::Active(_) => {
+                self.rollback_transaction();
+            },
+            TransactionState::Completing(receiver) => {
+                // Wait for the completion to finish before closing
+                let _ = futures::executor::block_on(receiver);
+            },
+            TransactionState::Unusable => todo!(),
+        }
     }
 }
 

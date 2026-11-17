@@ -1,11 +1,16 @@
 use super::*;
 use crate::storage::{
-    catalog::{CatalogObjectId, CatalogRead, RelationId}, rows::{IndexSearch, RowRead, RowStream, RowWrite}, schema::{
+    StorageError,
+    schema::{CreateIndex, CreateView, TableAlteration},
+};
+use crate::storage::{
+    catalog::{CatalogObjectId, CatalogRead, RelationId},
+    rows::{IndexSearch, RowRead, RowStream, RowWrite},
+    schema::{
         ColumnDefinition, CreateTable, IndexDefinition, SchemaWrite, TableDefinition,
         ViewDefinition, constraints::CreateConstraint,
     },
 };
-use engine::helpers::errors::RowStreamError;
 use std::{
     future::{Future, pending},
     mem::ManuallyDrop,
@@ -66,25 +71,38 @@ impl StorageManager for MockStorage {
 #[async_trait]
 #[allow(unused_variables)]
 impl CatalogRead<MockStorage> for MockTx {
-    async fn resolve_relation(&self, name: &str) -> Option<RelationId<MockStorage>> {
+    async fn resolve_relation(
+        &self,
+        name: &str,
+    ) -> Result<Option<RelationId<MockStorage>>, StorageError> {
         unreachable!("not used by transaction lifecycle tests")
     }
-    async fn get_table(&self, id: ()) -> Option<TableDefinition<MockStorage>> {
+    async fn get_table(
+        &self,
+        id: (),
+    ) -> Result<Option<TableDefinition<MockStorage>>, StorageError> {
         unreachable!("not used by transaction lifecycle tests")
     }
-    async fn get_index(&self, id: ()) -> Option<IndexDefinition<MockStorage>> {
+    async fn get_index(
+        &self,
+        id: (),
+    ) -> Result<Option<IndexDefinition<MockStorage>>, StorageError> {
         unreachable!("not used by transaction lifecycle tests")
     }
-    async fn get_column(&self, table_id: (), id: ()) -> Option<ColumnDefinition<MockStorage>> {
+    async fn get_column(
+        &self,
+        table_id: (),
+        id: (),
+    ) -> Result<Option<ColumnDefinition<MockStorage>>, StorageError> {
         unreachable!("not used by transaction lifecycle tests")
     }
-    async fn get_view(&self, id: ()) -> Option<ViewDefinition<MockStorage>> {
+    async fn get_view(&self, id: ()) -> Result<Option<ViewDefinition<MockStorage>>, StorageError> {
         unreachable!("not used by transaction lifecycle tests")
     }
     async fn get_dependents(
         &self,
         id: CatalogObjectId<MockStorage>,
-    ) -> Vec<CatalogObjectId<MockStorage>> {
+    ) -> Result<Vec<CatalogObjectId<MockStorage>>, StorageError> {
         unreachable!("not used by transaction lifecycle tests")
     }
 }
@@ -92,42 +110,42 @@ impl CatalogRead<MockStorage> for MockTx {
 #[async_trait]
 #[allow(unused_variables)]
 impl SchemaWrite<MockStorage> for MockTx {
+    async fn create_table(&self, definition: CreateTable) -> Result<(), StorageError> {
+        unreachable!("not used by transaction lifecycle tests")
+    }
     async fn create_constraint(
         &self,
         table_id: (),
         definition: CreateConstraint<MockStorage>,
-    ) -> Result<(), TransactionError> {
+    ) -> Result<(), StorageError> {
         unreachable!("not used by transaction lifecycle tests")
     }
-    async fn drop_constraint(&self, table_id: (), id: ()) -> Result<(), TransactionError> {
-        unreachable!("not used by transaction lifecycle tests")
-    }
-    async fn create_table(&self, definition: CreateTable) -> Result<(), TransactionError> {
+    async fn drop_constraint(&self, table_id: (), id: ()) -> Result<(), StorageError> {
         unreachable!("not used by transaction lifecycle tests")
     }
     async fn alter_table(
         &self,
         id: (),
-        definition: TableDefinition<MockStorage>,
-    ) -> Result<(), TransactionError> {
+        alteration: TableAlteration<MockStorage>,
+    ) -> Result<(), StorageError> {
         unreachable!("not used by transaction lifecycle tests")
     }
-    async fn drop_table(&self, id: ()) -> Result<(), TransactionError> {
+    async fn drop_table(&self, id: ()) -> Result<(), StorageError> {
         unreachable!("not used by transaction lifecycle tests")
     }
-    async fn create_index(&self, definition: IndexDefinition<MockStorage>) -> () {
+    async fn create_index(&self, definition: CreateIndex<MockStorage>) -> Result<(), StorageError> {
         unreachable!("not used by transaction lifecycle tests")
     }
-    async fn drop_index(&self, id: ()) -> Result<(), TransactionError> {
+    async fn drop_index(&self, id: ()) -> Result<(), StorageError> {
         unreachable!("not used by transaction lifecycle tests")
     }
-    async fn replace_view(&self, definition: ViewDefinition<MockStorage>) -> () {
+    async fn replace_view(&self, id: (), definition: CreateView) -> Result<(), StorageError> {
         unreachable!("not used by transaction lifecycle tests")
     }
-    async fn create_view(&self, definition: ViewDefinition<MockStorage>) -> () {
+    async fn create_view(&self, definition: CreateView) -> Result<(), StorageError> {
         unreachable!("not used by transaction lifecycle tests")
     }
-    async fn drop_view(&self, id: ()) -> Result<(), TransactionError> {
+    async fn drop_view(&self, id: ()) -> Result<(), StorageError> {
         unreachable!("not used by transaction lifecycle tests")
     }
 }
@@ -135,10 +153,14 @@ impl SchemaWrite<MockStorage> for MockTx {
 #[async_trait]
 #[allow(unused_variables)]
 impl RowRead<MockStorage> for MockTx {
-    async fn scan(&self, id: ()) -> Result<RowStream<MockStorage>, RowStreamError> {
+    async fn scan(&self, id: ()) -> Result<RowStream<MockStorage>, StorageError> {
         unreachable!("not used by transaction lifecycle tests")
     }
-    async fn lookup(&self, id: (), search: IndexSearch) -> Result<RowStream<MockStorage>, RowStreamError> {
+    async fn lookup(
+        &self,
+        id: (),
+        search: IndexSearch,
+    ) -> Result<RowStream<MockStorage>, StorageError> {
         unreachable!("not used by transaction lifecycle tests")
     }
 }
@@ -146,18 +168,13 @@ impl RowRead<MockStorage> for MockTx {
 #[async_trait]
 #[allow(unused_variables)]
 impl RowWrite<MockStorage> for MockTx {
-    async fn delete(&self, table_id: (), row_id: ()) -> Result<(), TransactionError> {
+    async fn delete(&self, table_id: (), row_id: ()) -> Result<(), StorageError> {
         unreachable!("not used by transaction lifecycle tests")
     }
-    async fn insert(&self, table_id: (), values: &[Value]) -> Result<(), TransactionError> {
+    async fn insert(&self, table_id: (), values: &[Value]) -> Result<(), StorageError> {
         unreachable!("not used by transaction lifecycle tests")
     }
-    async fn update(
-        &self,
-        table_id: (),
-        row_id: (),
-        values: &[Value],
-    ) -> Result<(), TransactionError> {
+    async fn update(&self, table_id: (), row_id: (), values: &[Value]) -> Result<(), StorageError> {
         unreachable!("not used by transaction lifecycle tests")
     }
 }
@@ -338,4 +355,102 @@ fn test_dropping_unpolled_commit_keeps_transaction_active() {
     ));
     assert_eq!(engine.storage_manager.commits.load(Ordering::SeqCst), 0);
     handle.rollback_transaction().unwrap();
+}
+
+#[test]
+fn test_exact_lookup_requires_full_nonempty_key() {
+    use crate::storage::schema::IndexAccess;
+    for count in [0, 1, 3] {
+        let search = IndexSearch::Exact {
+            key: vec![Value::Int(5), Value::Int(6)],
+        };
+        assert!(matches!(
+            search.validate(IndexAccess::Exact, count),
+            Err(StorageError::InvalidInput(_))
+        ));
+    }
+    let search = IndexSearch::Exact {
+        key: vec![Value::Int(5), Value::Int(6)],
+    };
+    assert_eq!(search.validate(IndexAccess::Exact, 2), Ok(()));
+    assert_eq!(search.validate(IndexAccess::Ordered, 2), Ok(()));
+}
+
+#[test]
+fn test_range_lookup_requires_ordered_access_and_a_next_column() {
+    use crate::storage::schema::IndexAccess;
+    use std::ops::Bound;
+    let search = IndexSearch::PrefixRange {
+        prefix: vec![Value::Int(5)],
+        lower: Bound::Excluded(Value::Int(5)),
+        upper: Bound::Unbounded,
+    };
+    assert!(matches!(
+        search.validate(IndexAccess::Exact, 3),
+        Err(StorageError::UnsupportedOperation(_))
+    ));
+    assert!(matches!(
+        search.validate(IndexAccess::Ordered, 1),
+        Err(StorageError::InvalidInput(_))
+    ));
+    assert_eq!(search.validate(IndexAccess::Ordered, 3), Ok(()));
+    let leading_range = IndexSearch::PrefixRange {
+        prefix: vec![],
+        lower: Bound::Unbounded,
+        upper: Bound::Included(Value::Int(9)),
+    };
+    assert_eq!(leading_range.validate(IndexAccess::Ordered, 3), Ok(()));
+}
+
+#[test]
+fn test_null_lookup_components_are_explicitly_unsupported() {
+    use crate::storage::schema::IndexAccess;
+    use std::ops::Bound;
+    let searches = [
+        IndexSearch::Exact {
+            key: vec![Value::Null],
+        },
+        IndexSearch::PrefixRange {
+            prefix: vec![Value::Null],
+            lower: Bound::Unbounded,
+            upper: Bound::Unbounded,
+        },
+        IndexSearch::PrefixRange {
+            prefix: vec![],
+            lower: Bound::Included(Value::Null),
+            upper: Bound::Unbounded,
+        },
+        IndexSearch::PrefixRange {
+            prefix: vec![],
+            lower: Bound::Unbounded,
+            upper: Bound::Excluded(Value::Null),
+        },
+    ];
+    for search in searches {
+        assert!(matches!(
+            search.validate(
+                IndexAccess::Ordered,
+                if matches!(search, IndexSearch::Exact { .. }) {
+                    1
+                } else {
+                    2
+                }
+            ),
+            Err(StorageError::UnsupportedOperation(_))
+        ));
+    }
+}
+
+#[test]
+fn test_nonfinite_lookup_values_are_invalid() {
+    use crate::storage::schema::IndexAccess;
+    for value in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        let search = IndexSearch::Exact {
+            key: vec![Value::Float(value)],
+        };
+        assert!(matches!(
+            search.validate(IndexAccess::Exact, 1),
+            Err(StorageError::InvalidInput(_))
+        ));
+    }
 }

@@ -131,3 +131,15 @@ The remote handle owns a network session. SQL and separately encoded parameters
 are sent to the server, whose local connection performs preparation and execution.
 Transaction state belongs to that session. Local and remote connections expose
 the same wrapper API; the URL and transport API are illustrative.
+
+## Implementing a storage provider
+
+The current provider interface lives in `local_engine::storage`. See the
+[current storage API](../design/storage_api.md) for its capability traits and
+creation sequence. Inputs use `schema::{CreateTable, CreateIndex, CreateView}`;
+assigned IDs appear in returned metadata. Renames use `TableAlteration`.
+Catalog lookups return `Result<Option<_>, StorageError>` and row streams yield
+storage errors independently of public query execution errors. Providers validate
+`rows::IndexSearch` against `schema::IndexAccess` and return explicit unsupported
+errors rather than silently changing a lookup into a scan. These interfaces do
+not yet have a working storage provider.

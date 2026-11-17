@@ -7,6 +7,39 @@ use self::{
     schema::SchemaWrite,
 };
 
+/// Failures from storage operations, independent of SQL parsing and execution.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum StorageError {
+    UnsupportedOperation(String),
+    InvalidInput(String),
+    NotFound(String),
+    AlreadyExists(String),
+    ConstraintViolation(String),
+    DependencyExists(String),
+    Conflict(String),
+    Unusable(String),
+    Backend(String),
+}
+
+impl std::fmt::Display for StorageError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let (label, message) = match self {
+            Self::UnsupportedOperation(m) => ("Unsupported storage operation", m),
+            Self::InvalidInput(m) => ("Invalid storage input", m),
+            Self::NotFound(m) => ("Object not found", m),
+            Self::AlreadyExists(m) => ("Object already exists", m),
+            Self::ConstraintViolation(m) => ("Constraint violation", m),
+            Self::DependencyExists(m) => ("Dependent objects exist", m),
+            Self::Conflict(m) => ("Storage conflict", m),
+            Self::Unusable(m) => ("Storage transaction unusable", m),
+            Self::Backend(m) => ("Storage failure", m),
+        };
+        write!(f, "{label}: {message}")
+    }
+}
+impl std::error::Error for StorageError {}
+
 #[async_trait]
 pub trait StorageManager: Sized + Send + Sync {
     type TableId;
@@ -23,7 +56,7 @@ pub trait StorageManager: Sized + Send + Sync {
 /// Name resolution and stored metadata access.
 pub mod catalog {
     use super::{
-        StorageManager,
+        StorageError, StorageManager,
         schema::{ColumnDefinition, IndexDefinition, TableDefinition, ViewDefinition},
     };
     use async_trait::async_trait;
@@ -41,28 +74,45 @@ pub mod catalog {
         View(SM::ViewId),
     }
 
+    /// `Ok(None)` means absent; `Err` means the read failed. Dependency reads
+    /// return `NotFound` for an unknown source object, and an empty list for no dependents.
     #[async_trait]
     pub trait CatalogRead<SM: StorageManager> {
-        async fn resolve_relation(&self, name: &str) -> Option<RelationId<SM>>
+        async fn resolve_relation(
+            &self,
+            name: &str,
+        ) -> Result<Option<RelationId<SM>>, StorageError>
         where
             Self: Sized;
-        async fn get_table(&self, id: SM::TableId) -> Option<TableDefinition<SM>>
+        async fn get_table(
+            &self,
+            id: SM::TableId,
+        ) -> Result<Option<TableDefinition<SM>>, StorageError>
         where
             Self: Sized;
-        async fn get_index(&self, id: SM::IndexId) -> Option<IndexDefinition<SM>>
+        async fn get_index(
+            &self,
+            id: SM::IndexId,
+        ) -> Result<Option<IndexDefinition<SM>>, StorageError>
         where
             Self: Sized;
         async fn get_column(
             &self,
             table_id: SM::TableId,
             id: SM::ColumnId,
-        ) -> Option<ColumnDefinition<SM>>
+        ) -> Result<Option<ColumnDefinition<SM>>, StorageError>
         where
             Self: Sized;
-        async fn get_view(&self, id: SM::ViewId) -> Option<ViewDefinition<SM>>
+        async fn get_view(
+            &self,
+            id: SM::ViewId,
+        ) -> Result<Option<ViewDefinition<SM>>, StorageError>
         where
             Self: Sized;
-        async fn get_dependents(&self, id: CatalogObjectId<SM>) -> Vec<CatalogObjectId<SM>>
+        async fn get_dependents(
+            &self,
+            id: CatalogObjectId<SM>,
+        ) -> Result<Vec<CatalogObjectId<SM>>, StorageError>
         where
             Self: Sized;
     }
@@ -71,9 +121,9 @@ pub mod catalog {
 /// Schema creation inputs, stored definitions, and mutation operations.
 pub mod schema {
     use self::constraints::{ConstraintDefinition, CreateConstraint};
-    use super::StorageManager;
+    use super::{StorageError, StorageManager};
     use async_trait::async_trait;
-    use engine::helpers::{DataType, errors::TransactionError};
+    use engine::helpers::DataType;
     use std::sync::Arc;
 
     /// Input for a new table. Storage assigns table and column IDs.
@@ -104,8 +154,44 @@ pub mod schema {
         pub spec: ColumnSpec,
     }
 
+    /// Requested access capabilities; provider algorithms remain private.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum IndexAccess {
+        Exact,
+        Ordered,
+    }
+
+    pub struct CreateIndex<SM: StorageManager> {
+        pub table_id: SM::TableId,
+        pub name: String,
+        pub columns: Vec<SM::ColumnId>,
+        pub is_unique: bool,
+        pub access: IndexAccess,
+    }
+
+    /// SQL text is persisted as text; upstream parser AST never crosses this boundary.
+    /// View execution and binding are engine responsibilities.
+    pub struct CreateView {
+        pub name: String,
+        pub columns: Vec<ColumnSpec>,
+        pub query: String,
+    }
+
+    /// Small, explicit alterations. Type changes, defaults and backfills are deferred.
+    pub enum TableAlteration<SM: StorageManager> {
+        Rename {
+            name: String,
+        },
+        RenameColumn {
+            column_id: SM::ColumnId,
+            name: String,
+        },
+    }
+
     pub struct IndexDefinition<SM: StorageManager> {
         pub id: SM::IndexId,
+        pub table_id: SM::TableId,
+        pub access: IndexAccess,
         pub name: String,
         pub columns: Arc<[SM::ColumnId]>,
         pub is_unique: bool,
@@ -155,14 +241,13 @@ pub mod schema {
     }
 
     /// Individual schema operations participate in the enclosing transaction.
+    /// Errors leave no partial operation. Earlier successful operations remain pending;
+    /// callers must roll back the transaction to discard a multi-operation statement.
     #[async_trait]
     pub trait SchemaWrite<SM: StorageManager> {
         /// Creates a table and assigns IDs to its columns, preserving input order.
         /// The returned ID can be passed to `CatalogRead::get_table` to resolve columns.
-        async fn create_table(
-            &self,
-            definition: CreateTable,
-        ) -> Result<SM::TableId, TransactionError>
+        async fn create_table(&self, definition: CreateTable) -> Result<SM::TableId, StorageError>
         where
             Self: Sized;
 
@@ -175,7 +260,7 @@ pub mod schema {
             &self,
             table_id: SM::TableId,
             definition: CreateConstraint<SM>,
-        ) -> Result<SM::ConstraintId, TransactionError>
+        ) -> Result<SM::ConstraintId, StorageError>
         where
             Self: Sized;
 
@@ -184,34 +269,47 @@ pub mod schema {
             &self,
             table_id: SM::TableId,
             id: SM::ConstraintId,
-        ) -> Result<(), TransactionError>
+        ) -> Result<(), StorageError>
         where
             Self: Sized;
+        /// Preserve object IDs and dependencies when renaming. Unsupported alterations
+        /// return `UnsupportedOperation`; no operation may partially mutate on error.
         async fn alter_table(
             &self,
             id: SM::TableId,
-            definition: TableDefinition<SM>,
-        ) -> Result<(), TransactionError>
+            alteration: TableAlteration<SM>,
+        ) -> Result<(), StorageError>
         where
             Self: Sized;
-        async fn drop_table(&self, id: SM::TableId) -> Result<(), TransactionError>
+        async fn drop_table(&self, id: SM::TableId) -> Result<(), StorageError>
         where
             Self: Sized;
 
-        /// Creates an index on a table.
-        async fn create_index(&self, definition: IndexDefinition<SM>) -> SM::IndexId
+        /// Creates an index on a table. Reject unsupported access with
+        /// `UnsupportedOperation`; reject empty, duplicate, or unknown key columns.
+        /// Index maintenance must participate in every subsequent row write.
+        async fn create_index(
+            &self,
+            definition: CreateIndex<SM>,
+        ) -> Result<SM::IndexId, StorageError>
         where
             Self: Sized;
-        async fn drop_index(&self, id: SM::IndexId) -> Result<(), TransactionError>
+        async fn drop_index(&self, id: SM::IndexId) -> Result<(), StorageError>
         where
             Self: Sized;
-        async fn replace_view(&self, definition: ViewDefinition<SM>) -> SM::ViewId
+        /// Replace an existing view while preserving its ID. Reject incompatible output
+        /// columns or dependent objects; unsupported view storage is an explicit error.
+        async fn replace_view(
+            &self,
+            id: SM::ViewId,
+            definition: CreateView,
+        ) -> Result<(), StorageError>
         where
             Self: Sized;
-        async fn create_view(&self, definition: ViewDefinition<SM>) -> SM::ViewId
+        async fn create_view(&self, definition: CreateView) -> Result<SM::ViewId, StorageError>
         where
             Self: Sized;
-        async fn drop_view(&self, id: SM::ViewId) -> Result<(), TransactionError>
+        async fn drop_view(&self, id: SM::ViewId) -> Result<(), StorageError>
         where
             Self: Sized;
     }
@@ -219,12 +317,12 @@ pub mod schema {
 
 /// Row representations and read/write capabilities.
 pub mod rows {
-    use super::{StorageManager, schema::ColumnDefinition};
-    use async_trait::async_trait;
-    use engine::helpers::{
-        Value,
-        errors::{RowStreamError, TransactionError},
+    use super::{
+        StorageError, StorageManager,
+        schema::{ColumnDefinition, IndexAccess},
     };
+    use async_trait::async_trait;
+    use engine::helpers::Value;
     use futures_channel::mpsc;
     use std::{ops::Bound, sync::Arc};
 
@@ -234,9 +332,12 @@ pub mod rows {
         pub row_id: SM::RowId,
     }
 
-    pub type RowStream<SM: StorageManager> = mpsc::Receiver<Result<Row<SM>, RowStreamError>>;
+    pub type RowStream<SM: StorageManager> = mpsc::Receiver<Result<Row<SM>, StorageError>>;
 
-    /// A search query for an index.
+    /// Physical access restriction, not a SQL predicate. NULL keys/bounds are
+    /// unsupported for now; the engine uses a scan for SQL NULL predicates.
+    /// Exact requires a full key. PrefixRange fixes leading columns and bounds
+    /// the next column; trailing columns are unrestricted. Result order is unspecified.
     pub enum IndexSearch {
         Exact {
             key: Vec<Value>,
@@ -248,17 +349,79 @@ pub mod rows {
         },
     }
 
+    impl IndexSearch {
+        /// Validate access capability and key shape before a provider reads rows.
+        /// Providers additionally validate value types and lower/upper ordering.
+        pub fn validate(
+            &self,
+            access: IndexAccess,
+            key_columns: usize,
+        ) -> Result<(), StorageError> {
+            if key_columns == 0 {
+                return Err(StorageError::InvalidInput("index must have a key".into()));
+            }
+            let values: Vec<&Value> = match self {
+                Self::Exact { key } => {
+                    if key.len() != key_columns {
+                        return Err(StorageError::InvalidInput(
+                            "exact search requires a full key".into(),
+                        ));
+                    }
+                    key.iter().collect()
+                }
+                Self::PrefixRange {
+                    prefix,
+                    lower,
+                    upper,
+                } => {
+                    if access != IndexAccess::Ordered {
+                        return Err(StorageError::UnsupportedOperation(
+                            "index does not support ranges".into(),
+                        ));
+                    }
+                    if prefix.len() >= key_columns {
+                        return Err(StorageError::InvalidInput(
+                            "range needs a column after the prefix".into(),
+                        ));
+                    }
+                    prefix
+                        .iter()
+                        .chain([lower, upper].into_iter().filter_map(|b| match b {
+                            Bound::Included(v) | Bound::Excluded(v) => Some(v),
+                            Bound::Unbounded => None,
+                        }))
+                        .collect()
+                }
+            };
+            if values.iter().any(|v| matches!(v, Value::Null)) {
+                return Err(StorageError::UnsupportedOperation(
+                    "NULL index searches are not defined yet".into(),
+                ));
+            }
+            if values
+                .iter()
+                .any(|v| matches!(v, Value::Float(f) if !f.is_finite()))
+            {
+                return Err(StorageError::InvalidInput(
+                    "non-finite index search value".into(),
+                ));
+            }
+            Ok(())
+        }
+    }
+
     #[async_trait]
     pub trait RowRead<SM: StorageManager> {
-        async fn scan(&self, id: SM::TableId) -> Result<RowStream<SM>, RowStreamError>
+        async fn scan(&self, id: SM::TableId) -> Result<RowStream<SM>, StorageError>
         where
             Self: Sized;
-        /// Look up rows in an index based on a search query.
+        /// Validate the search against index metadata; unsupported searches return
+        /// `UnsupportedOperation` rather than silently scanning the table.
         async fn lookup(
             &self,
             id: SM::IndexId,
             search: IndexSearch,
-        ) -> Result<RowStream<SM>, RowStreamError>
+        ) -> Result<RowStream<SM>, StorageError>
         where
             Self: Sized;
     }
@@ -269,7 +432,7 @@ pub mod rows {
             &self,
             table_id: SM::TableId,
             row_id: SM::RowId,
-        ) -> Result<(), TransactionError>
+        ) -> Result<(), StorageError>
         where
             Self: Sized;
 
@@ -277,7 +440,7 @@ pub mod rows {
             &self,
             table_id: SM::TableId,
             values: &[Value],
-        ) -> Result<SM::RowId, TransactionError>
+        ) -> Result<SM::RowId, StorageError>
         where
             Self: Sized;
 
@@ -286,7 +449,7 @@ pub mod rows {
             table_id: SM::TableId,
             row_id: SM::RowId,
             values: &[Value],
-        ) -> Result<(), TransactionError>
+        ) -> Result<(), StorageError>
         where
             Self: Sized;
     }
@@ -294,6 +457,11 @@ pub mod rows {
 
 /// Full storage transaction. Consumers can require individual capability traits.
 /// All capabilities share one transaction snapshot and commit/rollback boundary.
+/// Dropping an unfinished transaction must release/roll back its resources.
+/// Cancellation of begin/commit must either finish cleanup independently or leave
+/// no live transaction/resources behind. Completion errors make the connection
+/// unusable; they do not establish whether a commit persisted. A failed operation
+/// must not be committed unless the provider explicitly guarantees continued use.
 #[async_trait]
 pub trait Transaction<SM: StorageManager>:
     CatalogRead<SM> + SchemaWrite<SM> + RowRead<SM> + RowWrite<SM>

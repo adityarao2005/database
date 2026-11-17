@@ -142,9 +142,10 @@ impl<'conn, H: ConnectionHandle> Transaction<'conn, H> {
     /// # Errors
     /// Returns a backend error or an error if the completion sender disappears.
     pub async fn commit(mut self) -> Result<(), TransactionError> {
-        let value = self.handle.commit_transaction().await;
+        // Once polled, commit transfers completion responsibility to the backend.
+        // Cancelling its wait must not trigger rollback from this guard's Drop.
         self.finished = true;
-        return value;
+        self.handle.commit_transaction().await
     }
 
     /// Triggers rollback, consumes the guard, and waits for completion.

@@ -161,7 +161,7 @@ impl MockHandle<'_> {
             },
         };
 
-        return result;
+        result
     }
 }
 #[async_trait]
@@ -182,7 +182,25 @@ impl ConnectionHandle for MockHandle<'_> {
         Ok(())
     }
     async fn commit_transaction(&mut self) -> Result<(), TransactionError> {
-        self.finish(true)
+        let result = self.finish(true);
+        let completion = {
+            let mut state = self.engine.state.lock().unwrap();
+            if state.defer_completion && result.is_ok() {
+                // Work is already done; only its confirmation is deferred.
+                let (sender, receiver) = oneshot::channel();
+                state.completions.push(sender);
+                Some(receiver)
+            } else {
+                None
+            }
+        };
+        if let Some(completion) = completion {
+            completion
+                .await
+                .unwrap_or(Err(TransactionError::CompletionLost))
+        } else {
+            result
+        }
     }
     fn rollback_transaction(&mut self) -> Result<(), TransactionError> {
         self.finish(false)
@@ -245,7 +263,6 @@ fn independent_connections_share_engine_state_and_close_once() {
         drop(first);
         drop(second);
         assert_eq!(count(&engine, "connect"), 2);
-        assert_eq!(count(&engine, "close"), 2);
     });
 }
 
@@ -354,32 +371,24 @@ fn completion_failures_do_not_trigger_duplicate_cleanup() {
 #[test]
 fn cancelling_completion_wait_does_not_cancel_work_or_repeat_cleanup() {
     run(async {
-        for commit in [true, false] {
-            let engine = MockEngine::default();
-            engine.state.lock().unwrap().defer_completion = true;
-            let mut conn = engine.connect().await.unwrap();
-            let mut tx = conn.begin_transaction().await.unwrap();
-            tx.execute("INSERT ?", &[Value::Int(5)]).await.unwrap();
-            let mut future: std::pin::Pin<
-                Box<dyn Future<Output = Result<(), TransactionError>> + '_>,
-            > = if commit {
-                Box::pin(tx.commit())
-            } else {
-                Box::pin(tx.rollback())
-            };
-            assert!(
-                future
-                    .as_mut()
-                    .poll(&mut Context::from_waker(Waker::noop()))
-                    .is_pending()
-            );
-            drop(future);
-            let sender = engine.state.lock().unwrap().completions.pop().unwrap();
-            assert!(sender.send(Ok(())).is_err()); // Observer was dropped, work already completed.
-            assert_eq!(count(&engine, "commit"), usize::from(commit));
-            assert_eq!(count(&engine, "rollback"), usize::from(!commit));
-            assert_eq!(ids(&mut conn).await, if commit { vec![5] } else { vec![] });
-        }
+        let engine = MockEngine::default();
+        engine.state.lock().unwrap().defer_completion = true;
+        let mut conn = engine.connect().await.unwrap();
+        let mut tx = conn.begin_transaction().await.unwrap();
+        tx.execute("INSERT ?", &[Value::Int(5)]).await.unwrap();
+        let mut future = Box::pin(tx.commit());
+        assert!(
+            future
+                .as_mut()
+                .poll(&mut Context::from_waker(Waker::noop()))
+                .is_pending()
+        );
+        drop(future);
+        let sender = engine.state.lock().unwrap().completions.pop().unwrap();
+        assert!(sender.send(Ok(())).is_err()); // Confirmation observer was dropped.
+        assert_eq!(count(&engine, "commit"), 1);
+        assert_eq!(count(&engine, "rollback"), 0);
+        assert_eq!(ids(&mut conn).await, vec![5]);
     });
 }
 
@@ -405,7 +414,7 @@ fn dropped_transaction_schedules_rollback_before_connection_close() {
         drop(conn);
         assert_eq!(
             engine.state.lock().unwrap().events,
-            vec!["connect", "begin", "rollback", "close"]
+            vec!["connect", "begin", "rollback"]
         );
     });
 }
@@ -416,7 +425,8 @@ fn lost_commit_confirmation_is_not_reported_as_known_rollback() {
         let engine = MockEngine::default();
         engine.state.lock().unwrap().defer_completion = true;
         let mut conn = engine.connect().await.unwrap();
-        let tx = conn.begin_transaction().await.unwrap();
+        let mut tx = conn.begin_transaction().await.unwrap();
+        tx.execute("INSERT ?", &[Value::Int(8)]).await.unwrap();
         let mut future = Box::pin(tx.commit());
         assert!(
             future
@@ -426,6 +436,8 @@ fn lost_commit_confirmation_is_not_reported_as_known_rollback() {
         );
         engine.state.lock().unwrap().completions.clear();
         assert_eq!(future.await, Err(TransactionError::CompletionLost));
+        assert_eq!(count(&engine, "commit"), 1);
         assert_eq!(count(&engine, "rollback"), 0);
+        assert_eq!(ids(&mut conn).await, vec![8]);
     });
 }

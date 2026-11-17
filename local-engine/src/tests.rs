@@ -1,8 +1,6 @@
 use super::*;
 use crate::storage::{
-    catalog::{CatalogObjectId, CatalogRead, RelationId},
-    rows::{RowRead, RowStream, RowWrite},
-    schema::{
+    catalog::{CatalogObjectId, CatalogRead, RelationId}, rows::{IndexSearch, RowRead, RowStream, RowWrite}, schema::{
         ColumnDefinition, CreateTable, IndexDefinition, SchemaWrite, TableDefinition,
         ViewDefinition, constraints::CreateConstraint,
     },
@@ -140,7 +138,7 @@ impl RowRead<MockStorage> for MockTx {
     async fn scan(&self, id: ()) -> Result<RowStream<MockStorage>, RowStreamError> {
         unreachable!("not used by transaction lifecycle tests")
     }
-    async fn lookup(&self, id: ()) -> Result<RowStream<MockStorage>, RowStreamError> {
+    async fn lookup(&self, id: (), search: IndexSearch) -> Result<RowStream<MockStorage>, RowStreamError> {
         unreachable!("not used by transaction lifecycle tests")
     }
 }

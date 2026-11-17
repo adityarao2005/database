@@ -1,5 +1,12 @@
 use super::*;
-use crate::storage::*;
+use crate::storage::{
+    catalog::{CatalogObjectId, CatalogRead, RelationId},
+    rows::{RowRead, RowStream, RowWrite},
+    schema::{
+        ColumnDefinition, CreateTable, IndexDefinition, SchemaWrite, TableDefinition,
+        ViewDefinition, constraints::CreateConstraint,
+    },
+};
 use engine::helpers::errors::RowStreamError;
 use std::{
     future::{Future, pending},
@@ -60,7 +67,7 @@ impl StorageManager for MockStorage {
 }
 #[async_trait]
 #[allow(unused_variables)]
-impl Transaction<MockStorage> for MockTx {
+impl CatalogRead<MockStorage> for MockTx {
     async fn resolve_relation(&self, name: &str) -> Option<RelationId<MockStorage>> {
         unreachable!("not used by transaction lifecycle tests")
     }
@@ -82,7 +89,22 @@ impl Transaction<MockStorage> for MockTx {
     ) -> Vec<CatalogObjectId<MockStorage>> {
         unreachable!("not used by transaction lifecycle tests")
     }
-    async fn create_table(&self, definition: TableDefinition<MockStorage>) -> () {
+}
+
+#[async_trait]
+#[allow(unused_variables)]
+impl SchemaWrite<MockStorage> for MockTx {
+    async fn create_constraint(
+        &self,
+        table_id: (),
+        definition: CreateConstraint<MockStorage>,
+    ) -> Result<(), TransactionError> {
+        unreachable!("not used by transaction lifecycle tests")
+    }
+    async fn drop_constraint(&self, table_id: (), id: ()) -> Result<(), TransactionError> {
+        unreachable!("not used by transaction lifecycle tests")
+    }
+    async fn create_table(&self, definition: CreateTable) -> Result<(), TransactionError> {
         unreachable!("not used by transaction lifecycle tests")
     }
     async fn alter_table(
@@ -110,12 +132,22 @@ impl Transaction<MockStorage> for MockTx {
     async fn drop_view(&self, id: ()) -> Result<(), TransactionError> {
         unreachable!("not used by transaction lifecycle tests")
     }
+}
+
+#[async_trait]
+#[allow(unused_variables)]
+impl RowRead<MockStorage> for MockTx {
     async fn scan(&self, id: ()) -> Result<RowStream<MockStorage>, RowStreamError> {
         unreachable!("not used by transaction lifecycle tests")
     }
     async fn lookup(&self, id: ()) -> Result<RowStream<MockStorage>, RowStreamError> {
         unreachable!("not used by transaction lifecycle tests")
     }
+}
+
+#[async_trait]
+#[allow(unused_variables)]
+impl RowWrite<MockStorage> for MockTx {
     async fn delete(&self, table_id: (), row_id: ()) -> Result<(), TransactionError> {
         unreachable!("not used by transaction lifecycle tests")
     }
@@ -130,6 +162,10 @@ impl Transaction<MockStorage> for MockTx {
     ) -> Result<(), TransactionError> {
         unreachable!("not used by transaction lifecycle tests")
     }
+}
+
+#[async_trait]
+impl Transaction<MockStorage> for MockTx {
     async fn commit(self) -> Result<(), TransactionError> {
         self.commits.fetch_add(1, Ordering::SeqCst);
         match self.commit {

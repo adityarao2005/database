@@ -57,7 +57,7 @@ input. Returned rows have no guaranteed order.
 
 `StorageError` distinguishes unsupported operations, invalid input, missing or
 existing objects, constraints, dependencies, conflicts, unusable transactions,
-and backend failures. Catalog lookups return `Result<Option<_>, StorageError>`:
+and fatal storage failures (`Unusable`). Catalog lookups return `Result<Option<_>, StorageError>`:
 absence is `Ok(None)`, never a disguised read failure. Dependency reads on missing
 objects return `NotFound`. Row operations and streamed items use `StorageError`;
 the engine translates these at its public execution boundary. Transaction startup
@@ -104,13 +104,19 @@ connection: successful rollback can restore connection usability. Providers must
 prevent committing a transaction they have marked aborted, even if the engine
 has not yet observed the failure.
 
-These are intended guarantees, not a completed implementation. `StorageError`
-and `ExecutionError` currently describe causes but do not provide a complete
-transaction-effect protocol. That protocol must be defined before execution is
-implemented; callers must not guess recovery from message text. `Aborted(T)` is
-present in the local state enum, but execution and transitions into it are not
-implemented. Rollback accepts both active and aborted transactions, preserves idle
-and unusable states on invalid calls, and returns to idle only after cleanup succeeds.
+`StorageError::aborts_transaction()` specifies the storage error effect:
+`Conflict` and `Unusable` require rollback/drop; all other variants guarantee the
+failed operation leaves the prior transaction state unchanged and usable. General
+storage failures that cannot provide that guarantee use `Unusable`; there is no
+catch-all `Backend` variant. `Unusable` means the transaction cannot continue,
+not that cleanup is complete or the connection is permanently lost. Rollback
+success permits connection reuse; rollback failure invalidates it.
+
+Execution must translate the public error while retaining this internal effect;
+`ExecutionError` alone is not the state protocol. Execution and transitions into
+`Aborted(T)` are still unimplemented. Rollback accepts active and aborted
+transactions, preserves idle/unusable states on invalid calls, and restores idle
+only after cleanup succeeds. These local state transitions are covered by tests.
 
 ### Statements composed of several operations
 
@@ -162,8 +168,9 @@ algorithm. Internal enforcement structures are not user-droppable schema indexes
 Defaults and check constraints are deferred until SQL preparation introduces
 engine-owned expression types with defined binding, typing, and SQL NULL
 semantics. A default produces a value; a check evaluates a row expression.
-Neither is represented by the current `ColumnSpec` or `ConstraintKind`, and
-unsupported definitions must be rejected explicitly when SQL preparation exists.
+Defaults are not represented by `ColumnSpec`. `ConstraintKind::Check` currently
+contains a string as a TODO placeholder; it has no executable semantics. Providers
+must reject it with `UnsupportedOperation` until the evaluation contract exists.
 
 The planned boundary is SQL text to sqlparser syntax AST to engine-owned prepared
 expressions and queries. Upstream AST types stay inside preparation and never
@@ -188,9 +195,10 @@ or SQL execution is implemented by these contracts.
 ## Verification and follow-up
 
 Existing tests cover transaction completion, cancellation, error propagation,
-invalid state calls, and lookup shape/capability validation using mocks. They do
-not verify provider durability, isolation, operation rollback, aborted-state
-cleanup, or SQL statement atomicity. Provider tests must exercise partial-write
+invalid state calls, aborted rollback success/failure, every storage error's
+classification/diagnostics, and lookup shape/capability validation using mocks.
+They do not verify provider durability, isolation, operation rollback, actual
+resource cleanup, or SQL statement atomicity. Provider tests must exercise partial-write
 failures, disk exhaustion where applicable, continued use after recoverable
 errors, aborted cleanup, and constraint preservation with concurrent writes.
 

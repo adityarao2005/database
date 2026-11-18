@@ -146,7 +146,8 @@ not yet have a working storage provider.
 
 Recoverable operation errors must leave a provider transaction unchanged and
 usable. Fatal errors require aborted-transaction cleanup or connection invalidation;
-the error-to-state protocol is still pending implementation. SQL statements spanning
+`StorageError::aborts_transaction()` identifies fatal errors (`Conflict` and
+`Unusable`), but execution-side state transitions remain to be implemented. SQL statements spanning
 multiple operations need transaction rollback on failure until statement recovery
 exists. See the [transaction and expression decisions](../design/storage_api.md)
 for intended guarantees and known implementation gaps. Defaults/check expressions

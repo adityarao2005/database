@@ -13,7 +13,6 @@ use crate::storage::{
 };
 use std::{
     future::{Future, pending},
-    mem::ManuallyDrop,
     sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
@@ -207,9 +206,8 @@ fn ready<F: Future>(future: F) -> F::Output {
         Poll::Pending => panic!("expected immediate completion"),
     }
 }
-// LocalEngine::drop is still a todo; avoid invoking that unrelated scaffold.
-fn engine(storage: MockStorage) -> ManuallyDrop<LocalEngine<MockStorage>> {
-    ManuallyDrop::new(LocalEngine::new(storage))
+fn engine(storage: MockStorage) -> LocalEngine<MockStorage> {
+    LocalEngine::new(storage)
 }
 fn assert_unusable(handle: &mut LocalConnectionHandle<'_, MockStorage>) {
     assert!(matches!(
@@ -453,4 +451,167 @@ fn test_nonfinite_lookup_values_are_invalid() {
             Err(StorageError::InvalidInput(_))
         ));
     }
+}
+
+// Execution is not implemented yet; construct the aborted state directly to test
+// completion independently of the future SQL/error dispatch layer.
+fn abort(handle: &mut LocalConnectionHandle<'_, MockStorage>) {
+    let TransactionState::Active(tx) =
+        std::mem::replace(&mut handle.current_transaction, TransactionState::Unusable)
+    else {
+        panic!("expected active transaction")
+    };
+    handle.current_transaction = TransactionState::Aborted(tx);
+}
+
+#[test]
+fn test_aborted_transaction_rejects_begin_and_commit_then_allows_rollback() {
+    let engine = engine(MockStorage::default());
+    let mut handle = LocalConnectionHandle::new(&engine);
+    ready(handle.begin_transaction()).unwrap();
+    abort(&mut handle);
+    assert!(matches!(
+        ready(handle.begin_transaction()),
+        Err(TransactionError::InvalidState(_))
+    ));
+    assert!(matches!(
+        ready(handle.commit_transaction()),
+        Err(TransactionError::InvalidState(_))
+    ));
+    assert!(matches!(
+        handle.current_transaction,
+        TransactionState::Aborted(_)
+    ));
+    assert_eq!(engine.storage_manager.begins.load(Ordering::SeqCst), 1);
+    assert_eq!(engine.storage_manager.commits.load(Ordering::SeqCst), 0);
+    handle.rollback_transaction().unwrap();
+    assert!(matches!(handle.current_transaction, TransactionState::Idle));
+    assert_eq!(engine.storage_manager.rollbacks.load(Ordering::SeqCst), 1);
+    ready(handle.begin_transaction()).unwrap();
+    handle.rollback_transaction().unwrap();
+}
+
+#[test]
+fn test_failed_aborted_rollback_preserves_error_and_prevents_reuse() {
+    let engine = engine(MockStorage {
+        rollback: Outcome::Error,
+        ..Default::default()
+    });
+    let mut handle = LocalConnectionHandle::new(&engine);
+    ready(handle.begin_transaction()).unwrap();
+    abort(&mut handle);
+    assert_eq!(handle.rollback_transaction(), Err(failure()));
+    assert_unusable(&mut handle);
+    assert_eq!(engine.storage_manager.rollbacks.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn test_storage_errors_define_recovery_and_preserve_diagnostics() {
+    let cases = [
+        (
+            StorageError::UnsupportedOperation("details".into()),
+            false,
+            "Unsupported storage operation",
+        ),
+        (
+            StorageError::InvalidInput("details".into()),
+            false,
+            "Invalid storage input",
+        ),
+        (
+            StorageError::NotFound("details".into()),
+            false,
+            "Object not found",
+        ),
+        (
+            StorageError::AlreadyExists("details".into()),
+            false,
+            "Object already exists",
+        ),
+        (
+            StorageError::ConstraintViolation("details".into()),
+            false,
+            "Constraint violation",
+        ),
+        (
+            StorageError::DependencyExists("details".into()),
+            false,
+            "Dependent objects exist",
+        ),
+        (
+            StorageError::Conflict("details".into()),
+            true,
+            "Storage conflict",
+        ),
+        (
+            StorageError::Unusable("details".into()),
+            true,
+            "Storage transaction unusable",
+        ),
+    ];
+    for (error, aborts, label) in cases {
+        assert_eq!(error.aborts_transaction(), aborts);
+        let source: &dyn std::error::Error = &error;
+        assert_eq!(source.to_string(), format!("{label}: details"));
+        assert!(source.source().is_none());
+    }
+}
+
+#[test]
+fn test_range_lookup_validates_both_bounds_and_nonfinite_prefix_values() {
+    use crate::storage::schema::IndexAccess;
+    use std::ops::Bound;
+    for value in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        for search in [
+            IndexSearch::PrefixRange {
+                prefix: vec![Value::Float(value)],
+                lower: Bound::Unbounded,
+                upper: Bound::Unbounded,
+            },
+            IndexSearch::PrefixRange {
+                prefix: vec![],
+                lower: Bound::Excluded(Value::Float(value)),
+                upper: Bound::Unbounded,
+            },
+            IndexSearch::PrefixRange {
+                prefix: vec![],
+                lower: Bound::Unbounded,
+                upper: Bound::Included(Value::Float(value)),
+            },
+        ] {
+            assert!(matches!(
+                search.validate(IndexAccess::Ordered, 2),
+                Err(StorageError::InvalidInput(_))
+            ));
+        }
+    }
+    for lower in [
+        Bound::Included(Value::Int(1)),
+        Bound::Excluded(Value::Int(1)),
+        Bound::Unbounded,
+    ] {
+        let search = IndexSearch::PrefixRange {
+            prefix: vec![],
+            lower,
+            upper: Bound::Excluded(Value::Int(9)),
+        };
+        assert_eq!(search.validate(IndexAccess::Ordered, 1), Ok(()));
+    }
+    let search = IndexSearch::PrefixRange {
+        prefix: vec![Value::Int(1), Value::Int(2)],
+        lower: Bound::Unbounded,
+        upper: Bound::Unbounded,
+    };
+    assert!(matches!(
+        search.validate(IndexAccess::Ordered, 1),
+        Err(StorageError::InvalidInput(_))
+    ));
+    assert!(matches!(
+        search.validate(IndexAccess::Ordered, 0),
+        Err(StorageError::InvalidInput(_))
+    ));
+    assert!(matches!(
+        IndexSearch::Exact { key: vec![] }.validate(IndexAccess::Exact, 1),
+        Err(StorageError::InvalidInput(_))
+    ));
 }

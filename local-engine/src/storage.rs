@@ -8,8 +8,9 @@ use self::{
 };
 
 /// Failures from storage operations, independent of SQL parsing and execution.
-/// These causes do not yet encode whether the transaction remains usable.
-/// See `docs/design/storage_api.md` for the intended recovery contract.
+/// `Conflict` and `Unusable` abort the transaction; other errors preserve its
+/// prior logical state. Aborted transactions allow only rollback/drop.
+/// A fatal error does not imply cleanup already happened or the connection is lost.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum StorageError {
@@ -21,7 +22,13 @@ pub enum StorageError {
     DependencyExists(String),
     Conflict(String),
     Unusable(String),
-    Backend(String),
+}
+
+impl StorageError {
+    /// Whether the caller must stop transaction work and retain it for cleanup.
+    pub fn aborts_transaction(&self) -> bool {
+        matches!(self, Self::Conflict(_) | Self::Unusable(_))
+    }
 }
 
 impl std::fmt::Display for StorageError {
@@ -35,7 +42,6 @@ impl std::fmt::Display for StorageError {
             Self::DependencyExists(m) => ("Dependent objects exist", m),
             Self::Conflict(m) => ("Storage conflict", m),
             Self::Unusable(m) => ("Storage transaction unusable", m),
-            Self::Backend(m) => ("Storage failure", m),
         };
         write!(f, "{label}: {message}")
     }
@@ -177,6 +183,7 @@ pub mod schema {
     pub struct CreateView {
         pub name: String,
         pub columns: Vec<ColumnSpec>,
+        // TODO: change this to a relational algebra query
         pub query: String,
     }
 
@@ -239,6 +246,10 @@ pub mod schema {
                 columns: Vec<SM::ColumnId>,
                 referenced_table: SM::TableId,
                 referenced_columns: Vec<SM::ColumnId>,
+            },
+            // TODO: change this to a boolean algebra expression
+            Check {
+                expression: String,
             },
         }
     }
@@ -465,8 +476,9 @@ pub mod rows {
 /// no live transaction/resources behind. Completion errors make the connection
 /// unusable; they do not establish whether a commit persisted. Recoverable operation
 /// errors leave the prior logical transaction state unchanged and usable. Fatal
-/// errors forbid further work except cleanup. The error-to-state protocol is pending;
-/// see `docs/design/storage_api.md`. Multi-operation statement recovery is separate.
+/// errors (`StorageError::aborts_transaction`) forbid further work except cleanup.
+/// The engine must apply that classification when execution is implemented.
+/// Multi-operation statement recovery is separate.
 #[async_trait]
 pub trait Transaction<SM: StorageManager>:
     CatalogRead<SM> + SchemaWrite<SM> + RowRead<SM> + RowWrite<SM>

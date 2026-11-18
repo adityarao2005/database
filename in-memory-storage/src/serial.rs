@@ -1,5 +1,8 @@
+use std::sync::Arc;
+
 use async_trait::async_trait;
 use engine::helpers::{Value, errors::TransactionError};
+use futures::lock::{Mutex, OwnedMutexGuard};
 use local_engine::storage::{
     StorageError, StorageManager, Transaction,
     catalog::{CatalogObjectId, CatalogRead, RelationId},
@@ -10,11 +13,15 @@ use local_engine::storage::{
     },
 };
 
-pub struct SerialStorageManager {}
+pub struct SerialStorageManager {
+    mutex: Arc<Mutex<()>>
+}
 
 impl SerialStorageManager {
     pub fn new() -> Self {
-        SerialStorageManager {}
+        SerialStorageManager {
+            mutex: Arc::new(Mutex::new(())),
+        }
     }
 }
 
@@ -30,11 +37,14 @@ impl StorageManager for SerialStorageManager {
     type Tx = SerialTransaction;
 
     async fn begin_transaction(&self) -> Result<Self::Tx, TransactionError> {
-        todo!()
+        let guard = self.mutex.clone().lock_owned().await;
+        Ok(SerialTransaction { guard })
     }
 }
 
-pub struct SerialTransaction {}
+pub struct SerialTransaction {
+    guard: OwnedMutexGuard<()>
+}
 
 #[async_trait]
 impl Transaction<SerialStorageManager> for SerialTransaction {

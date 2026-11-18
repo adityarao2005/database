@@ -12,11 +12,12 @@ use engine::{
     connection::{Connection, ConnectionHandle, Executable},
     engine::Engine,
     helpers::{
-        Column, Completion, DataType, ResultSet, RowSet, Value,
+        ResultSet, Value,
         errors::{ConnectionError, ExecutionError, TransactionError},
     },
 };
-use futures_channel::oneshot;
+use futures_channel::{mpsc, oneshot};
+use futures_core::Stream;
 
 // A tiny test executor: wakeups unpark the test thread, without a runtime dependency.
 struct ThreadWake(thread::Thread);
@@ -120,13 +121,7 @@ impl Executable for MockHandle<'_> {
             }
             "SELECT" if params.is_empty() => {
                 let values = self.pending.as_ref().unwrap_or(&state.values);
-                let (mut sender, rows) = RowSet::channel(
-                    vec![Column {
-                        name: "id".into(),
-                        data_type: DataType::Int,
-                    }],
-                    values.len(),
-                );
+                let (mut sender, rows) = mpsc::channel(values.len());
                 for value in values {
                     sender.try_send(Ok(vec![Value::Int(*value)])).unwrap();
                 }
@@ -138,8 +133,7 @@ impl Executable for MockHandle<'_> {
     }
 }
 impl MockHandle<'_> {
-    fn finish(&mut self, commit: bool) -> Completion {
-        let (sender, receiver) = oneshot::channel();
+    fn finish(&mut self, commit: bool) -> Result<(), TransactionError> {
         let mut state = self.engine.state.lock().unwrap();
         state
             .events
@@ -166,13 +160,8 @@ impl MockHandle<'_> {
                 }
             },
         };
-        // Work completes independently of its observer. Only delivery is deferred.
-        if state.defer_completion && result.is_ok() {
-            state.completions.push(sender);
-        } else {
-            let _ = sender.send(result);
-        }
-        Completion::new(receiver)
+
+        result
     }
 }
 #[async_trait]
@@ -192,17 +181,29 @@ impl ConnectionHandle for MockHandle<'_> {
         self.pending = Some(state.values.clone());
         Ok(())
     }
-    fn commit_transaction(&mut self) -> Completion {
-        self.finish(true)
-    }
-    fn rollback_transaction(&mut self) -> Completion {
-        self.finish(false)
-    }
-    fn close(&mut self) {
-        if self.pending.is_some() {
-            drop(self.finish(false));
+    async fn commit_transaction(&mut self) -> Result<(), TransactionError> {
+        let result = self.finish(true);
+        let completion = {
+            let mut state = self.engine.state.lock().unwrap();
+            if state.defer_completion && result.is_ok() {
+                // Work is already done; only its confirmation is deferred.
+                let (sender, receiver) = oneshot::channel();
+                state.completions.push(sender);
+                Some(receiver)
+            } else {
+                None
+            }
+        };
+        if let Some(completion) = completion {
+            completion
+                .await
+                .unwrap_or(Err(TransactionError::CompletionLost))
+        } else {
+            result
         }
-        self.engine.state.lock().unwrap().events.push("close");
+    }
+    fn rollback_transaction(&mut self) -> Result<(), TransactionError> {
+        self.finish(false)
     }
 }
 fn count(engine: &MockEngine, event: &str) -> usize {
@@ -220,9 +221,11 @@ async fn ids(connection: &mut Connection<'_, MockHandle<'_>>) -> Vec<i64> {
         panic!("expected rows")
     };
     let mut values = vec![];
-    while let Some(row) = rows.next().await {
+    while let Some(row) =
+        std::future::poll_fn(|cx| std::pin::Pin::new(&mut rows).poll_next(cx)).await
+    {
         let row = row.unwrap();
-        let Value::Int(id) = row.get_by_name("id").unwrap() else {
+        let Value::Int(id) = row.first().unwrap() else {
             panic!("expected integer")
         };
         values.push(*id);
@@ -260,7 +263,6 @@ fn independent_connections_share_engine_state_and_close_once() {
         drop(first);
         drop(second);
         assert_eq!(count(&engine, "connect"), 2);
-        assert_eq!(count(&engine, "close"), 2);
     });
 }
 
@@ -369,32 +371,24 @@ fn completion_failures_do_not_trigger_duplicate_cleanup() {
 #[test]
 fn cancelling_completion_wait_does_not_cancel_work_or_repeat_cleanup() {
     run(async {
-        for commit in [true, false] {
-            let engine = MockEngine::default();
-            engine.state.lock().unwrap().defer_completion = true;
-            let mut conn = engine.connect().await.unwrap();
-            let mut tx = conn.begin_transaction().await.unwrap();
-            tx.execute("INSERT ?", &[Value::Int(5)]).await.unwrap();
-            let mut future: std::pin::Pin<
-                Box<dyn Future<Output = Result<(), TransactionError>> + '_>,
-            > = if commit {
-                Box::pin(tx.commit())
-            } else {
-                Box::pin(tx.rollback())
-            };
-            assert!(
-                future
-                    .as_mut()
-                    .poll(&mut Context::from_waker(Waker::noop()))
-                    .is_pending()
-            );
-            drop(future);
-            let sender = engine.state.lock().unwrap().completions.pop().unwrap();
-            assert!(sender.send(Ok(())).is_err()); // Observer was dropped, work already completed.
-            assert_eq!(count(&engine, "commit"), usize::from(commit));
-            assert_eq!(count(&engine, "rollback"), usize::from(!commit));
-            assert_eq!(ids(&mut conn).await, if commit { vec![5] } else { vec![] });
-        }
+        let engine = MockEngine::default();
+        engine.state.lock().unwrap().defer_completion = true;
+        let mut conn = engine.connect().await.unwrap();
+        let mut tx = conn.begin_transaction().await.unwrap();
+        tx.execute("INSERT ?", &[Value::Int(5)]).await.unwrap();
+        let mut future = Box::pin(tx.commit());
+        assert!(
+            future
+                .as_mut()
+                .poll(&mut Context::from_waker(Waker::noop()))
+                .is_pending()
+        );
+        drop(future);
+        let sender = engine.state.lock().unwrap().completions.pop().unwrap();
+        assert!(sender.send(Ok(())).is_err()); // Confirmation observer was dropped.
+        assert_eq!(count(&engine, "commit"), 1);
+        assert_eq!(count(&engine, "rollback"), 0);
+        assert_eq!(ids(&mut conn).await, vec![5]);
     });
 }
 
@@ -420,7 +414,7 @@ fn dropped_transaction_schedules_rollback_before_connection_close() {
         drop(conn);
         assert_eq!(
             engine.state.lock().unwrap().events,
-            vec!["connect", "begin", "rollback", "close"]
+            vec!["connect", "begin", "rollback"]
         );
     });
 }
@@ -431,7 +425,8 @@ fn lost_commit_confirmation_is_not_reported_as_known_rollback() {
         let engine = MockEngine::default();
         engine.state.lock().unwrap().defer_completion = true;
         let mut conn = engine.connect().await.unwrap();
-        let tx = conn.begin_transaction().await.unwrap();
+        let mut tx = conn.begin_transaction().await.unwrap();
+        tx.execute("INSERT ?", &[Value::Int(8)]).await.unwrap();
         let mut future = Box::pin(tx.commit());
         assert!(
             future
@@ -441,6 +436,8 @@ fn lost_commit_confirmation_is_not_reported_as_known_rollback() {
         );
         engine.state.lock().unwrap().completions.clear();
         assert_eq!(future.await, Err(TransactionError::CompletionLost));
+        assert_eq!(count(&engine, "commit"), 1);
         assert_eq!(count(&engine, "rollback"), 0);
+        assert_eq!(ids(&mut conn).await, vec![8]);
     });
 }

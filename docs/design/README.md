@@ -231,7 +231,10 @@ atomicity, operation ordering, or cleanup progress.
 
 `Executable::execute` returns `Result<ResultSet, ExecutionError>`:
 
-- `Rows(RowSet)` exposes column metadata and channel-backed row delivery.
+- `Rows(RowSet)` is a channel receiver yielding `Result<Vec<Value>, RowStreamError>`
+  in output-column order. It currently carries no column metadata. Producers are
+  responsible for validating row widths and ending delivery after an error; the
+  receiver itself does not enforce these rules.
 - `DMLSuccess { affected_rows: Option<u64> }` reports successful data modification.
 - `DDLSuccess` reports successful schema modification.
 

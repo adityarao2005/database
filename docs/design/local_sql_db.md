@@ -1,5 +1,10 @@
 # Local Engine SQL DB
 
+The [current storage API decisions](storage_api.md) take precedence over this
+broader design for creation inputs, supported alterations, error recovery,
+constraint/index independence, and deferred expressions/views. Diagrams and
+unimplemented features below remain architectural targets.
+
 The following class diagram describes the domain model for the local SQL engine.
 
 ```mermaid
@@ -77,7 +82,7 @@ classDiagram
         async scan(TableId) RowSet or Error
         async lookup(IndexId, IndexRange) RowSet or Error
         async insert(TableId, Tuple) RowId or Error
-        async delete(TableId, RowId) bool or Error
+        async delete(TableId, RowId) Result
         async update(TableId, RowId, Tuple) Result
         async commit()
         async rollback()
@@ -131,7 +136,7 @@ stateDiagram-v2
 
         input_sql --> sql_handling
         sql_handling --> new_event : success
-        sql_handling --> rollback_required : DDL failure
+        sql_handling --> rollback_required : statement failure
         rollback_required --> rollback_changes : explicit rollback or cleanup
     }
 
@@ -188,6 +193,50 @@ writes, or report a transaction conflict. Validation followed by an unprotected
 metadata write is insufficient. The provider chooses locking, versioning, and
 physical allocation strategies while preserving these guarantees.
 
+### Current Rust interface
+
+The first draft lives in [`local-engine/src/storage.rs`](../../local-engine/src/storage.rs).
+The diagrams describe the intended domain contracts; the following details describe
+the current Rust API and its remaining gaps.
+
+- `StorageManager: Sized + Send + Sync` provides associated `TableId`, `ColumnId`,
+  `ConstraintId`, `IndexId`, `ViewId`, and `RowId` types, plus a concrete
+  `Tx: Transaction<Self> + Send`. `begin_transaction()` returns
+  `Result<Self::Tx, TransactionError>`. It currently has no manager receiver;
+  binding transactions to a particular manager instance remains to be addressed.
+- The connection scaffold retains its storage transaction in an explicit state:
+  idle, active, completing, or unusable. While completing, an internal oneshot
+  receiver remains in the connection across cancelled waits. It is separate from
+  the public `Completion` observer; completion work must eventually notify both.
+  The scaffold conservatively makes the connection unusable after a completion
+  error, failed startup, or cancelled startup. Provider guarantees may later allow
+  reuse after known clean failures. Tracking aborted explicit transactions and
+  implementing commit, rollback, close, and execution remain future work.
+  Internal `commit(self)` and `rollback(self)` consume the transaction; backend-owned
+  completion and cleanup guarantees still apply when a caller cancels a wait.
+- `Row<SM>` contains shared ordered column definitions, a `Vec<Value>`, and the
+  provider's `RowId`. `RowStream<SM>` is a bounded channel receiver yielding
+  `Result<Row<SM>, RowStreamError>`. Producers validate rows and end delivery after
+  an error; the receiver does not enforce these rules. Receiver ownership alone
+  does not define cursor lifetime, transaction borrowing, or cancellation behavior.
+- `insert(table_id, values)` returns `Result<SM::RowId, TransactionError>`;
+  `update(table_id, row_id, values)` and `delete(table_id, row_id)` return
+  `Result<(), TransactionError>`. Inserts and updates receive complete ordered
+  rows after the engine evaluates assignments and defaults. A missing target row
+  is an error for update or delete. A SQL mutation matching zero rows succeeds
+  without issuing per-row mutations.
+- Metadata reads currently return `Option` or a dependency vector, while creation
+  and view replacement return bare IDs. These signatures still need a way to
+  report provider failures. `get_column` includes the owning table ID.
+- Definition structs are preliminary: tables currently embed index definitions,
+  columns omit defaults, constraints have IDs but no definition type, and views
+  store SQL text. The richer definitions below remain intended catalog contracts.
+  Creation inputs, explicit alterations, index ranges, and fallible view
+  replacement preserving identity still need their final Rust types.
+
+`Catalog`, `QueryExecutor`, and `QueryManager` remain future implementation work.
+This interface establishes their storage boundary without specifying their APIs.
+
 ### Definitions and lookup
 
 The initial catalog has one namespace, without named SQL schemas. Tables and
@@ -236,8 +285,8 @@ a table or view is valid. Neither type identifies a data row.
   or foreign key. Keys use ordered column IDs. Foreign keys identify the target
   table and key constraint, with explicit update and delete policies.
 - `IndexDefinition` contains its ID, name, table ID, ordered key columns,
-  uniqueness, and an optional owning constraint ID. It has one authoritative
-  definition; tables reference it by ID.
+  uniqueness, and supported access capabilities. Key constraints and user-visible
+  indexes are independent; there is no owning constraint ID.
 - `ViewDefinition` contains its ID, name, output columns, a database-owned logical
   query definition, and dependencies on other objects. Original SQL may be kept
   for display. Physical execution plans and upstream parser AST nodes are not
@@ -268,7 +317,7 @@ Internal `RowId` values are separate from SQL primary keys.
 `Tuple` means a complete ordered row matching the transaction-visible column
 definition. `update` replaces the complete row while preserving its `RowId`;
 the engine computes assignments and defaults before calling it. A missing target
-row is an error for `update`; `delete` returns `false` when no visible row exists.
+row is an error for both `update` and `delete`.
 Storage scans and index lookups must expose row IDs alongside tuples for mutations.
 Their internal row cursor need not use the application-facing `RowSet` type;
 `RowSet` in the diagram is shorthand for a fallible sequence of stored rows.
@@ -276,8 +325,8 @@ Their internal row cursor need not use the application-facing `RowSet` type;
 ### Creating and altering tables
 
 `create_table` creates both the logical definition and the provider's table
-representation. Constraints and their required supporting indexes are included in
-the same transactional operation. An empty table does not require a physical
+representation. Constraints and ordinary indexes are added through separate
+operations in the same transaction; see the current storage API for failure handling. An empty table does not require a physical
 allocation if the provider can represent it lazily.
 
 `alter_table(TableId, TableAlteration)` describes an explicit supported change,
@@ -289,8 +338,8 @@ rather than replacing arbitrary metadata. Initial alteration variants are:
 | Rename column | Update its name while preserving the column ID. |
 | Add column | Define values for existing rows and validate resulting constraints. |
 | Drop column | Reject dependent objects under the initial restricted-drop policy. |
-| Add constraint | Validate existing data and create any required backing index. |
-| Drop constraint | Check dependencies and remove exclusively owned backing indexes. |
+| Add constraint | Validate existing data and install provider-owned enforcement. |
+| Drop constraint | Check dependencies and remove the constraint enforcement. |
 
 The engine coordinates semantic validation and expression evaluation through the
 active transaction. The provider applies the corresponding metadata, row-layout,
@@ -308,10 +357,10 @@ their row changes. Commit publishes a complete, consistent index; rollback
 discards its creation. The provider coordinates index construction with concurrent
 writes and may initially block conflicting writes during the build.
 
-Primary-key and unique constraints own supporting unique indexes. Ordinary indexes
-can exist independently. Directly dropping a constraint-owned index is rejected;
-the owning constraint must be removed instead. `drop_index` removes both its
-definition and its transactional storage representation.
+Primary, unique, and foreign-key guarantees are independent of user-visible
+indexes. Providers may use private enforcement structures, but the API has no
+supporting-index ownership relation. Dropping an ordinary index must preserve
+constraints. `drop_index` removes its definition and transactional representation.
 
 An ordinary view stores a logical query definition without allocating row storage.
 `create_view` validates its query and dependencies. `replace_view` preserves the
@@ -328,17 +377,23 @@ Catalog coordinates dependency checks and storage applies the changes under the
 same transaction's concurrency protection. Physical reclamation may be deferred
 until no reader needs the removed objects.
 
-### Failed DDL and rollback
+### Statement failures and rollback
 
-Any error while preparing or executing an identified DDL statement marks its
-active transaction as requiring rollback. This includes name-resolution,
-validation, unsupported-operation, storage, and dependency errors. A malformed
-statement that cannot be classified does not acquire DDL-specific behavior;
-general statement-error policy is separate.
+Any error while preparing or executing a SQL statement marks its active
+transaction as requiring rollback. This includes syntax, parameter, name-resolution,
+type-validation, unsupported-operation, constraint, storage, and dependency errors,
+as well as errors delivered after row streaming begins. The policy applies to
+DDL, reads, and mutations alike; malformed statements need not be classified first.
+A successful query or mutation producing zero rows is not an error.
 
-After a DDL failure, subsequent SQL execution and `commit` are rejected with a
+In an explicit transaction, the original statement error is returned and the
+transaction remains open but aborted until rollback or cleanup completes. Returning
+an error does not itself complete rollback. Earlier successful statements and any
+partial work from the failed statement remain uncommitted and cannot be published.
+
+After a statement failure, subsequent SQL execution and `commit` are rejected with a
 transaction-aborted error. A rejected commit must not publish changes or make the
-connection reusable as though rollback had completed. Partial DDL work remains
+connection reusable as though rollback had completed. Partial statement work remains
 uncommitted and is discarded together with earlier work in the transaction when
 rollback completes. Statement savepoints and recovery within that transaction
 are not initially supported.
@@ -350,7 +405,7 @@ transaction. Dropping or closing the connection likewise arranges cleanup.
 Session reuse waits for cleanup; failed cleanup makes the session unusable.
 
 In autocommit mode, the engine rolls back the failed statement's implicit
-transaction before allowing another operation. The original DDL error is returned;
+transaction before allowing another operation. The original statement error is returned;
 cleanup failure must also be recorded and prevent unsafe session reuse. The
 storage provider owns completion and cancellation handling, following the
 connection cleanup contract in [the engine design](./README.md#completion-and-cleanup).
@@ -367,9 +422,6 @@ open. These must not be silently selected by individual storage providers:
 - **Isolation and constraint protection:** choose the minimum isolation contract
   for engine validation, including protection of absent-key checks and foreign-key
   checks. Atomic writes alone do not prevent concurrent constraint violations.
-- **Non-DDL failures:** decide whether preparation, read, and mutation failures
-  abort an explicit transaction. DDL's rollback-required policy is already fixed;
-  continuing after a partially applied mutation would require statement rollback.
 - **Identifier rules:** specify quoted and unquoted name comparison and the
   namespace for index names. Table/view name sharing alone does not settle these.
 - **Index comparison:** specify key ordering, NULL ordering and uniqueness,

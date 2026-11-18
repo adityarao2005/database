@@ -7,7 +7,7 @@ use async_trait::async_trait;
 use crate::engine::Engine;
 
 use crate::helpers::{
-    Completion, ResultSet, Value,
+    ResultSet, Value,
     errors::{ExecutionError, TransactionError},
 };
 
@@ -38,15 +38,9 @@ pub trait ConnectionHandle: Executable {
     /// Starts a transaction, returning a backend error if startup fails.
     async fn begin_transaction(&mut self) -> Result<(), TransactionError>;
     /// Triggers commit and returns an observer of its eventual result.
-    fn commit_transaction(&mut self) -> Completion;
-    /// Triggers rollback and returns an observer of its eventual result.
-    fn rollback_transaction(&mut self) -> Completion;
-    /// Releases or schedules cleanup of the session without committing active work.
-    ///
-    /// Called from `Drop`; implementations should neither block on asynchronous
-    /// work nor panic. Cleanup must survive destruction of the handle. Errors
-    /// cannot be returned through this method.
-    fn close(&mut self) -> ();
+    async fn commit_transaction(&mut self) -> Result<(), TransactionError>;
+    /// Triggers rollback and returns an observer of its eventual result. Must be synchronous.
+    fn rollback_transaction(&mut self) -> Result<(), TransactionError>;
 }
 
 /// An owned session wrapping a backend-specific handle.
@@ -76,12 +70,6 @@ impl<'engine, H: ConnectionHandle> Connection<'engine, H> {
     pub async fn begin_transaction(&mut self) -> Result<Transaction<'_, H>, TransactionError> {
         self.handle.begin_transaction().await?;
         Ok(Transaction::new(&mut self.handle))
-    }
-}
-
-impl<H: ConnectionHandle> Drop for Connection<'_, H> {
-    fn drop(&mut self) {
-        self.handle.close();
     }
 }
 
@@ -154,9 +142,10 @@ impl<'conn, H: ConnectionHandle> Transaction<'conn, H> {
     /// # Errors
     /// Returns a backend error or an error if the completion sender disappears.
     pub async fn commit(mut self) -> Result<(), TransactionError> {
-        let value = self.handle.commit_transaction();
+        // Once polled, commit transfers completion responsibility to the backend.
+        // Cancelling its wait must not trigger rollback from this guard's Drop.
         self.finished = true;
-        value.wait().await
+        self.handle.commit_transaction().await
     }
 
     /// Triggers rollback, consumes the guard, and waits for completion.
@@ -168,7 +157,7 @@ impl<'conn, H: ConnectionHandle> Transaction<'conn, H> {
     pub async fn rollback(mut self) -> Result<(), TransactionError> {
         let value = self.handle.rollback_transaction();
         self.finished = true;
-        value.wait().await
+        return value;
     }
 }
 
@@ -177,7 +166,7 @@ impl<H: ConnectionHandle> Drop for Transaction<'_, H> {
         if !self.finished {
             // If the transaction is dropped without explicitly committing or rolling back,
             // we should roll it back to ensure data consistency.
-            self.handle.rollback_transaction();
+            let _ = self.handle.rollback_transaction();
         }
     }
 }

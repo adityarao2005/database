@@ -1,7 +1,6 @@
-use std::{future::poll_fn, pin::Pin, slice::Iter, sync::Arc};
+use std::sync::Arc;
 
-use futures_channel::{mpsc, oneshot};
-use futures_core::Stream;
+use futures_channel::{mpsc};
 
 /// Errors grouped by the operation that can produce them.
 ///
@@ -150,34 +149,8 @@ pub mod errors {
     }
 }
 
-use errors::{RowAccessError, RowStreamError, TransactionError};
+use errors::{RowAccessError, RowStreamError};
 
-/// Receives the result of an operation already triggered by a backend.
-///
-/// This object does not schedule work. Dropping it discards the result receiver;
-/// the backend must continue the operation and handle failures independently.
-pub struct Completion {
-    receiver: oneshot::Receiver<Result<(), TransactionError>>,
-}
-
-impl Completion {
-    /// Wraps the receiver for a backend-owned operation.
-    pub fn new(receiver: oneshot::Receiver<Result<(), TransactionError>>) -> Self {
-        Self { receiver }
-    }
-
-    /// Waits for the operation result.
-    ///
-    /// # Errors
-    /// Returns the backend error, or [`TransactionError::CompletionLost`] if the sender
-    /// is dropped without delivering a result. Sender loss does not establish
-    /// whether the database operation succeeded or failed.
-    pub async fn wait(self) -> Result<(), TransactionError> {
-        self.receiver
-            .await
-            .unwrap_or(Err(TransactionError::CompletionLost))
-    }
-}
 
 /// A scalar SQL parameter or a value in a buffered result row.
 #[derive(Debug)]
@@ -201,7 +174,7 @@ pub enum Value {
 
 /// A successful SQL execution result.
 pub enum ResultSet {
-    /// Column metadata and asynchronous row delivery.
+    /// Asynchronous delivery of values in output-column order.
     Rows(RowSet),
     /// Successful schema modification.
     DDLSuccess,
@@ -260,18 +233,12 @@ impl Row {
     }
 }
 
-/// Column metadata and a bounded channel of fallible rows.
+/// Bounded channel receiver yielding values in output-column order.
 ///
-/// Dropping this object closes the receiver. Backends must handle send failure
-/// and arrange execution cleanup. This type currently does not borrow a connection;
-/// backend operation ordering and transaction cleanup remain backend obligations.
-/// Producers must send execution errors explicitly before closing the channel:
-/// channel closure alone is treated as end of rows, not proof of execution success.
-pub struct RowSet {
-    columns: Arc<[Column]>,
-    receiver: mpsc::Receiver<Result<Vec<Value>, RowStreamError>>,
-    finished: bool,
-}
+/// Producers validate row widths and stop sending after an execution error.
+/// The receiver carries no column metadata and does not enforce either rule.
+/// Poll using [`futures_core::Stream::poll_next`] or a stream extension trait.
+pub type RowSet = mpsc::Receiver<Result<Vec<Value>, RowStreamError>>;
 
 /// SQL types exposed through column metadata.
 pub enum DataType {
@@ -291,102 +258,15 @@ pub enum DataType {
     Time,
 }
 
-impl RowSet {
-    /// Creates row delivery and its producer endpoint with a bounded channel.
-    ///
-    /// Metadata is available immediately, including for empty results. Producers
-    /// must send one value per column, in column order. They must use a finite
-    /// buffer and avoid creating unbounded numbers of sender clones.
-    pub fn channel(
-        columns: Vec<Column>,
-        capacity: usize,
-    ) -> (mpsc::Sender<Result<Vec<Value>, RowStreamError>>, Self) {
-        let (sender, receiver) = mpsc::channel(capacity);
-        (
-            sender,
-            Self {
-                columns: columns.into(),
-                receiver,
-                finished: false,
-            },
-        )
-    }
-
-    /// Iterates over output-column metadata.
-    pub fn get_columns(&self) -> Iter<'_, Column> {
-        self.columns.iter()
-    }
-
-    /// Returns ordered metadata even before rows arrive.
-    pub fn columns(&self) -> &[Column] {
-        &self.columns
-    }
-
-    /// Waits for the next row; returns `None` after channel closure or an error.
-    ///
-    /// Backend errors and mismatched row widths are yielded once, after which
-    /// delivery ends. Dropping a pending call does not consume a future row.
-    pub async fn next(&mut self) -> Option<Result<Row, RowStreamError>> {
-        if self.finished {
-            return None;
-        }
-        let item = poll_fn(|cx| Pin::new(&mut self.receiver).poll_next(cx)).await;
-        match item {
-            Some(Ok(values)) if values.len() == self.columns.len() => Some(Ok(Row {
-                columns: Arc::clone(&self.columns),
-                values,
-            })),
-            Some(Ok(values)) => {
-                self.finished = true;
-                self.receiver.close();
-                Some(Err(RowStreamError::InvalidRowWidth {
-                    expected: self.columns.len(),
-                    actual: values.len(),
-                }))
-            }
-            Some(Err(error)) => {
-                self.finished = true;
-                self.receiver.close();
-                Some(Err(error))
-            }
-            None => {
-                self.finished = true;
-                None
-            }
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::*;
+
+use super::*;
+    use futures_core::Stream;
     use std::{
-        future::Future,
+        future::{Future, poll_fn},
         task::{Context, Poll, Waker},
     };
-
-    #[test]
-    fn completion_distinguishes_backend_failure_from_lost_confirmation() {
-        for result in [
-            Ok(()),
-            Err(TransactionError::Conflict("concurrent write".into())),
-        ] {
-            let (sender, receiver) = oneshot::channel();
-            sender.send(result.clone()).unwrap();
-            let mut wait = std::pin::pin!(Completion::new(receiver).wait());
-            assert_eq!(
-                wait.as_mut().poll(&mut Context::from_waker(Waker::noop())),
-                Poll::Ready(result)
-            );
-        }
-        let (sender, receiver) = oneshot::channel();
-        drop(sender);
-        let mut wait = std::pin::pin!(Completion::new(receiver).wait());
-        assert_eq!(
-            wait.as_mut().poll(&mut Context::from_waker(Waker::noop())),
-            Poll::Ready(Err(TransactionError::CompletionLost))
-        );
-    }
 
     #[test]
     fn stream_errors_preserve_the_execution_cause() {
@@ -406,9 +286,10 @@ mod tests {
 
     #[test]
     fn pending_row_wait_can_be_cancelled_without_losing_a_row() {
-        let (mut sender, mut rows) = RowSet::channel(vec![column("id")], 1);
+        let (mut sender, mut rows) = mpsc::channel(1);
         {
-            let mut next = std::pin::pin!(rows.next());
+            let mut next =
+                std::pin::pin!(poll_fn(|cx| std::pin::Pin::new(&mut rows).poll_next(cx)));
             assert!(
                 next.as_mut()
                     .poll(&mut Context::from_waker(Waker::noop()))
@@ -417,12 +298,12 @@ mod tests {
         }
         sender.try_send(Ok(vec![Value::Int(8)])).unwrap();
         let row = next_ready(&mut rows).unwrap().unwrap();
-        assert!(matches!(row.get(0), Some(Value::Int(8))));
+        assert!(matches!(row.first(), Some(Value::Int(8))));
     }
 
     #[test]
     fn bounded_delivery_applies_backpressure_and_drop_closes_receiver() {
-        let (mut sender, rows) = RowSet::channel(vec![], 0);
+        let (mut sender, rows): (_, RowSet) = mpsc::channel(0);
         // futures-channel reserves one slot for each sender, even at capacity zero.
         sender.try_send(Ok(vec![])).unwrap();
         assert!(sender.try_send(Ok(vec![])).unwrap_err().is_full());
@@ -431,27 +312,21 @@ mod tests {
     }
 
     #[test]
-    fn received_row_keeps_metadata_after_result_set_is_dropped() {
-        let (mut sender, mut rows) = RowSet::channel(vec![column("id")], 1);
-        sender.try_send(Ok(vec![Value::Null])).unwrap();
-        let row = next_ready(&mut rows).unwrap().unwrap();
-        drop(rows);
-        assert_eq!(row.columns()[0].name, "id");
-        assert!(matches!(row.get_by_name("id"), Ok(Value::Null)));
-    }
-
-    #[test]
-    fn terminal_error_discards_queued_rows() {
-        let (mut sender, mut rows) = RowSet::channel(vec![column("id")], 2);
+    fn receiver_delivers_errors_and_leaves_termination_to_the_producer() {
+        let (mut sender, mut rows) = mpsc::channel(2);
         sender
             .try_send(Err(errors::ExecutionError::Backend("failed".into()).into()))
             .unwrap();
         sender.try_send(Ok(vec![Value::Int(1)])).unwrap();
+        drop(sender);
         assert!(matches!(
             next_ready(&mut rows),
             Some(Err(RowStreamError::Execution(_)))
         ));
-        assert!(next_ready(&mut rows).is_none());
+        assert!(matches!(
+            next_ready(&mut rows).unwrap().unwrap()[0],
+            Value::Int(1)
+        ));
         assert!(next_ready(&mut rows).is_none());
     }
 
@@ -459,38 +334,7 @@ mod tests {
     fn all_value_kinds_can_be_delivered_in_column_order() {
         let date = chrono::NaiveDate::from_ymd_opt(2026, 11, 5).unwrap();
         let time = chrono::NaiveTime::from_hms_opt(12, 30, 0).unwrap();
-        let columns = vec![
-            Column {
-                name: "int".into(),
-                data_type: DataType::Int,
-            },
-            Column {
-                name: "float".into(),
-                data_type: DataType::Float,
-            },
-            Column {
-                name: "text".into(),
-                data_type: DataType::Varchar { max_length: 10 },
-            },
-            Column {
-                name: "bool".into(),
-                data_type: DataType::Boolean,
-            },
-            Column {
-                name: "null".into(),
-                data_type: DataType::Char { length: 1 },
-            },
-            Column {
-                name: "date".into(),
-                data_type: DataType::Date,
-            },
-            Column {
-                name: "time".into(),
-                data_type: DataType::Time,
-            },
-        ];
-        let (mut sender, mut rows) = RowSet::channel(columns, 1);
-        assert_eq!(rows.get_columns().count(), 7);
+        let (mut sender, mut rows) = mpsc::channel(1);
         sender
             .try_send(Ok(vec![
                 Value::Int(i64::MAX),
@@ -503,21 +347,13 @@ mod tests {
             ]))
             .unwrap();
         let row = next_ready(&mut rows).unwrap().unwrap();
-        assert!(matches!(row.get(0), Some(Value::Int(i64::MAX))));
+        assert!(matches!(row.first(), Some(Value::Int(i64::MAX))));
         assert!(matches!(row.get(1), Some(Value::Float(v)) if *v == 1.5));
         assert!(matches!(row.get(2), Some(Value::String(v)) if v == "hello"));
         assert!(matches!(row.get(3), Some(Value::Boolean(true))));
         assert!(matches!(row.get(4), Some(Value::Null)));
         assert!(matches!(row.get(5), Some(Value::Date(v)) if *v == date));
         assert!(matches!(row.get(6), Some(Value::Time(v)) if *v == time));
-    }
-
-    #[test]
-    fn dropping_completion_does_not_require_sender_to_cancel_work() {
-        let (sender, receiver) = oneshot::channel();
-        drop(Completion::new(receiver));
-        // Backends can finish work and tolerate an observer that has gone away.
-        assert_eq!(sender.send(Ok(())), Err(Ok(())));
     }
 
     fn column(name: &str) -> Column {
@@ -527,8 +363,8 @@ mod tests {
         }
     }
 
-    fn next_ready(rows: &mut RowSet) -> Option<Result<Row, RowStreamError>> {
-        let mut future = std::pin::pin!(rows.next());
+    fn next_ready(rows: &mut RowSet) -> Option<Result<Vec<Value>, RowStreamError>> {
+        let mut future = std::pin::pin!(poll_fn(|cx| std::pin::Pin::new(&mut *rows).poll_next(cx)));
         match future
             .as_mut()
             .poll(&mut Context::from_waker(Waker::noop()))
@@ -540,13 +376,10 @@ mod tests {
 
     #[test]
     fn row_access_preserves_order_and_rejects_ambiguous_names() {
-        let (mut sender, mut rows) =
-            RowSet::channel(vec![column("id"), column("id"), column("count")], 1);
-        sender
-            .try_send(Ok(vec![Value::Int(1), Value::Int(2), Value::Int(3)]))
-            .unwrap();
-        drop(sender);
-        let row = next_ready(&mut rows).unwrap().ok().unwrap();
+        let row = Row {
+            columns: vec![column("id"), column("id"), column("count")].into(),
+            values: vec![Value::Int(1), Value::Int(2), Value::Int(3)],
+        };
         assert!(matches!(row.get(1), Some(Value::Int(2))));
         assert!(row.get(3).is_none());
         assert!(matches!(row.get_by_name("count"), Ok(Value::Int(3))));
@@ -557,21 +390,25 @@ mod tests {
             Err(RowAccessError::ColumnNotFound(name)) if name == "missing"));
         assert_eq!(row.values().len(), 3);
         assert_eq!(row.columns().len(), 3);
-        assert!(next_ready(&mut rows).is_none());
     }
 
     #[test]
-    fn empty_results_keep_metadata() {
-        let (sender, mut rows) = RowSet::channel(vec![column("id")], 1);
+    fn empty_receiver_ends_when_sender_is_dropped() {
+        let (sender, mut rows) = mpsc::channel(1);
         drop(sender);
-        assert_eq!(rows.columns()[0].name, "id");
         assert!(next_ready(&mut rows).is_none());
     }
 
     #[test]
-    fn invalid_row_width_and_backend_errors_end_delivery() {
-        let (mut sender, mut rows) = RowSet::channel(vec![column("id")], 1);
-        sender.try_send(Ok(vec![])).unwrap();
+    fn producer_can_report_invalid_row_width() {
+        let (mut sender, mut rows) = mpsc::channel(1);
+        sender
+            .try_send(Err(RowStreamError::InvalidRowWidth {
+                expected: 1,
+                actual: 0,
+            }))
+            .unwrap();
+        drop(sender);
         assert!(matches!(
             next_ready(&mut rows),
             Some(Err(RowStreamError::InvalidRowWidth {
@@ -579,18 +416,6 @@ mod tests {
                 actual: 0
             }))
         ));
-        assert!(next_ready(&mut rows).is_none());
-
-        let (mut sender, mut rows) = RowSet::channel(vec![], 1);
-        sender
-            .try_send(Err(errors::ExecutionError::Backend(
-                "execution failed".into(),
-            )
-            .into()))
-            .unwrap();
-        assert!(
-            matches!(next_ready(&mut rows), Some(Err(RowStreamError::Execution(errors::ExecutionError::Backend(message)))) if message == "execution failed")
-        );
         assert!(next_ready(&mut rows).is_none());
     }
 }

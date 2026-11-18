@@ -261,7 +261,7 @@ pub mod schema {
     pub trait SchemaWrite<SM: StorageManager> {
         /// Creates a table and assigns IDs to its columns, preserving input order.
         /// The returned ID can be passed to `CatalogRead::get_table` to resolve columns.
-        async fn create_table(&self, definition: CreateTable) -> Result<SM::TableId, StorageError>
+        async fn create_table(&mut self, definition: CreateTable) -> Result<SM::TableId, StorageError>
         where
             Self: Sized;
 
@@ -271,7 +271,7 @@ pub mod schema {
         /// and foreign keys whose target is not a primary or unique key. Foreign-key
         /// column lists must have the same length. Failure must leave no partial constraint.
         async fn create_constraint(
-            &self,
+            &mut self,
             table_id: SM::TableId,
             definition: CreateConstraint<SM>,
         ) -> Result<SM::ConstraintId, StorageError>
@@ -280,7 +280,7 @@ pub mod schema {
 
         /// Rejects removal when other objects still depend on this constraint.
         async fn drop_constraint(
-            &self,
+            &mut self,
             table_id: SM::TableId,
             id: SM::ConstraintId,
         ) -> Result<(), StorageError>
@@ -289,13 +289,13 @@ pub mod schema {
         /// Preserve object IDs and dependencies when renaming. Unsupported alterations
         /// return `UnsupportedOperation`; no operation may partially mutate on error.
         async fn alter_table(
-            &self,
+            &mut self,
             id: SM::TableId,
             alteration: TableAlteration<SM>,
         ) -> Result<(), StorageError>
         where
             Self: Sized;
-        async fn drop_table(&self, id: SM::TableId) -> Result<(), StorageError>
+        async fn drop_table(&mut self, id: SM::TableId) -> Result<(), StorageError>
         where
             Self: Sized;
 
@@ -303,27 +303,27 @@ pub mod schema {
         /// `UnsupportedOperation`; reject empty, duplicate, or unknown key columns.
         /// Index maintenance must participate in every subsequent row write.
         async fn create_index(
-            &self,
+            &mut self,
             definition: CreateIndex<SM>,
         ) -> Result<SM::IndexId, StorageError>
         where
             Self: Sized;
-        async fn drop_index(&self, id: SM::IndexId) -> Result<(), StorageError>
+        async fn drop_index(&mut self, id: SM::IndexId) -> Result<(), StorageError>
         where
             Self: Sized;
         /// Replace an existing view while preserving its ID. Reject incompatible output
         /// columns or dependent objects; unsupported view storage is an explicit error.
         async fn replace_view(
-            &self,
+            &mut self,
             id: SM::ViewId,
             definition: CreateView,
         ) -> Result<(), StorageError>
         where
             Self: Sized;
-        async fn create_view(&self, definition: CreateView) -> Result<SM::ViewId, StorageError>
+        async fn create_view(&mut self, definition: CreateView) -> Result<SM::ViewId, StorageError>
         where
             Self: Sized;
-        async fn drop_view(&self, id: SM::ViewId) -> Result<(), StorageError>
+        async fn drop_view(&mut self, id: SM::ViewId) -> Result<(), StorageError>
         where
             Self: Sized;
     }
@@ -443,7 +443,7 @@ pub mod rows {
     #[async_trait]
     pub trait RowWrite<SM: StorageManager> {
         async fn delete(
-            &self,
+            &mut self,
             table_id: SM::TableId,
             row_id: SM::RowId,
         ) -> Result<(), StorageError>
@@ -451,7 +451,7 @@ pub mod rows {
             Self: Sized;
 
         async fn insert(
-            &self,
+            &mut self,
             table_id: SM::TableId,
             values: &[Value],
         ) -> Result<SM::RowId, StorageError>
@@ -459,7 +459,7 @@ pub mod rows {
             Self: Sized;
 
         async fn update(
-            &self,
+            &mut self,
             table_id: SM::TableId,
             row_id: SM::RowId,
             values: &[Value],

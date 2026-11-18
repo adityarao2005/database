@@ -109,42 +109,42 @@ impl CatalogRead<MockStorage> for MockTx {
 #[async_trait]
 #[allow(unused_variables)]
 impl SchemaWrite<MockStorage> for MockTx {
-    async fn create_table(&self, definition: CreateTable) -> Result<(), StorageError> {
+    async fn create_table(&mut self, definition: CreateTable) -> Result<(), StorageError> {
         unreachable!("not used by transaction lifecycle tests")
     }
     async fn create_constraint(
-        &self,
+        &mut self,
         table_id: (),
         definition: CreateConstraint<MockStorage>,
     ) -> Result<(), StorageError> {
         unreachable!("not used by transaction lifecycle tests")
     }
-    async fn drop_constraint(&self, table_id: (), id: ()) -> Result<(), StorageError> {
+    async fn drop_constraint(&mut self, table_id: (), id: ()) -> Result<(), StorageError> {
         unreachable!("not used by transaction lifecycle tests")
     }
     async fn alter_table(
-        &self,
+        &mut self,
         id: (),
         alteration: TableAlteration<MockStorage>,
     ) -> Result<(), StorageError> {
         unreachable!("not used by transaction lifecycle tests")
     }
-    async fn drop_table(&self, id: ()) -> Result<(), StorageError> {
+    async fn drop_table(&mut self, id: ()) -> Result<(), StorageError> {
         unreachable!("not used by transaction lifecycle tests")
     }
-    async fn create_index(&self, definition: CreateIndex<MockStorage>) -> Result<(), StorageError> {
+    async fn create_index(&mut self, definition: CreateIndex<MockStorage>) -> Result<(), StorageError> {
         unreachable!("not used by transaction lifecycle tests")
     }
-    async fn drop_index(&self, id: ()) -> Result<(), StorageError> {
+    async fn drop_index(&mut self, id: ()) -> Result<(), StorageError> {
         unreachable!("not used by transaction lifecycle tests")
     }
-    async fn replace_view(&self, id: (), definition: CreateView) -> Result<(), StorageError> {
+    async fn replace_view(&mut self, id: (), definition: CreateView) -> Result<(), StorageError> {
         unreachable!("not used by transaction lifecycle tests")
     }
-    async fn create_view(&self, definition: CreateView) -> Result<(), StorageError> {
+    async fn create_view(&mut self, definition: CreateView) -> Result<(), StorageError> {
         unreachable!("not used by transaction lifecycle tests")
     }
-    async fn drop_view(&self, id: ()) -> Result<(), StorageError> {
+    async fn drop_view(&mut self, id: ()) -> Result<(), StorageError> {
         unreachable!("not used by transaction lifecycle tests")
     }
 }
@@ -167,13 +167,13 @@ impl RowRead<MockStorage> for MockTx {
 #[async_trait]
 #[allow(unused_variables)]
 impl RowWrite<MockStorage> for MockTx {
-    async fn delete(&self, table_id: (), row_id: ()) -> Result<(), StorageError> {
+    async fn delete(&mut self, table_id: (), row_id: ()) -> Result<(), StorageError> {
         unreachable!("not used by transaction lifecycle tests")
     }
-    async fn insert(&self, table_id: (), values: &[Value]) -> Result<(), StorageError> {
+    async fn insert(&mut self, table_id: (), values: &[Value]) -> Result<(), StorageError> {
         unreachable!("not used by transaction lifecycle tests")
     }
-    async fn update(&self, table_id: (), row_id: (), values: &[Value]) -> Result<(), StorageError> {
+    async fn update(&mut self, table_id: (), row_id: (), values: &[Value]) -> Result<(), StorageError> {
         unreachable!("not used by transaction lifecycle tests")
     }
 }

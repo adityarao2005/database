@@ -153,7 +153,7 @@ use errors::{RowAccessError, RowStreamError};
 
 
 /// A scalar SQL parameter or a value in a buffered result row.
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum Value {
     /// A signed 64-bit integer.

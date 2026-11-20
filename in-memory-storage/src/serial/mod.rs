@@ -5,14 +5,16 @@ use engine::helpers::errors::TransactionError;
 use futures::lock::{Mutex, OwnedMutexGuard};
 use local_engine::storage::{StorageManager, Transaction};
 
+use crate::serial::data::SerialSchema;
+
 pub struct SerialStorageManager {
-    mutex: Arc<Mutex<()>>,
+    mutex: Arc<Mutex<SerialSchema>>,
 }
 
 impl SerialStorageManager {
     pub fn new() -> Self {
         SerialStorageManager {
-            mutex: Arc::new(Mutex::new(())),
+            mutex: Arc::new(Mutex::new(SerialSchema::new())),
         }
     }
 }
@@ -35,7 +37,7 @@ impl StorageManager for SerialStorageManager {
 }
 
 pub struct SerialTransaction {
-    pub(super) guard: OwnedMutexGuard<()>,
+    pub(super) guard: OwnedMutexGuard<SerialSchema>,
 }
 
 // TODO implement this
@@ -54,3 +56,4 @@ impl Transaction<SerialStorageManager> for SerialTransaction {
 mod catalog;
 mod rows;
 mod schema;
+mod data;

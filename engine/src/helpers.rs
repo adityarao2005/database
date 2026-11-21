@@ -239,8 +239,7 @@ impl Row {
 /// The receiver carries no column metadata and does not enforce either rule.
 /// Poll using [`futures_core::Stream::poll_next`] or a stream extension trait.
 pub type RowSet = mpsc::Receiver<Result<Vec<Value>, RowStreamError>>;
-
-/// SQL types exposed through column metadata.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum DataType {
     /// Fixed-length text.
     Char { length: usize },

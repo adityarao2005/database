@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use engine::helpers::Value;
+use engine::helpers::{DataType, Value};
 use local_engine::storage::{StorageManager, schema::constraints::ConstraintKind};
 
 use crate::serial::SerialStorageManager;
@@ -58,7 +58,7 @@ impl SerialSchema {
 pub struct SerialTable {
     pub id: TableId,
     pub name: String,
-    pub columns: HashMap<ColumnId, SerialColumn>,
+    pub columns: Vec<SerialColumn>,
     pub constraints: HashMap<ConstraintId, SerialConstraint>,
     pub rows: HashMap<RowId, Vec<Value>>,
     pub current_row_id: RowId,
@@ -70,7 +70,8 @@ pub struct SerialTable {
 pub struct SerialColumn {
     pub id: ColumnId,
     pub name: String,
-    pub data_type: String,
+    pub data_type: DataType,
+    pub not_null: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]

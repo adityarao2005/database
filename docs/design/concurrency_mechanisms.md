@@ -16,7 +16,7 @@ Serial transactions work by the following:
 - 1 transaction can only happen at a time even if they modify unrelated tables & rows.
 - A transaction which takes forever will starve other transactions from doing any work.
 
-## Single Writer with global table lock
+## Single Writer with global database lock
 
 Single writer transactions work based on the following:
 1. create a transaction
